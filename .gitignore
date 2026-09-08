@@ -1,0 +1,55 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual / conda
+.env
+.venv
+env/
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project
+*.log
+scale_cache/
+configs/*
+!configs/*.example
+eval_results/
+eval_new_results/
+
+# LLAVA module
+LLaVA-NeXT/
+lmms-eval/
+
+old_eval_results/
+result_add/
+
+prep_pip_freeze_before_gptq.txt

@@ -1,0 +1,43 @@
+# basic requirements
+torch>=2.0
+torchvision
+xopen
+anthropic
+
+# huggingface requirements
+accelerate>=0.21.0
+transformers==4.45.0
+datasets
+evaluate
+httpx==0.23.3
+
+# for logging or special models
+wandb
+sentencepiece
+
+# for longbench
+tqdm
+rouge
+jieba
+fuzzywuzzy
+einops
+
+# for visualization
+seaborn
+
+# for conversation tasks
+anthropic
+openai==0.28
+fschat
+
+# use flash attention
+packaging
+ninja
+triton>=2.1.0
+
+decord
+easydict
+imageio
+qwen-vl-utils
+
+# lmms-eval: install separately if needed, e.g. pip install lmms-eval
