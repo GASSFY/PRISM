@@ -40,6 +40,7 @@ Thumbs.db
 # Project
 *.log
 scale_cache/
+_paper_cache/
 configs/*
 !configs/*.example
 eval_results/
