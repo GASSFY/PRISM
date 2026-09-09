@@ -1,6 +1,6 @@
 # PRISM
 
-**PRISM**: Precision Retention by Importance Scoring for Multimodal.
+**PRISM**: Precision Retention by Importance Scoring for Multimodal
 
 Phase-1：仅权重 **伪量化**（ASD 选列 + SpQR 风格分组），用 lmms-eval 测多模态精度。  
 真量化部署 / CUDA kernel / 推理加速 → **后续阶段**，本仓库暂不包含。
