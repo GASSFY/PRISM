@@ -28,7 +28,8 @@ def load_checkpoint(model: torch.nn.Module, path: str) -> None:
         print(f"[PRISM] Loaded checkpoint from {path}")
         return
 
-    if "quant_payload" in state or state.get("format") == "asdq_int4_v2":
+    # Legacy format id "asdq_int4_v2" kept for rejecting old ASDQ deploy checkpoints.
+    if "quant_payload" in state or state.get("format") in ("asdq_int4_v2", "prism_int4_v2"):
         raise ValueError(
             f"Checkpoint {path} looks like a real-int4 / v2 deploy format. "
             "Phase-1 PRISM only supports pseudo-quant float state_dict. "

@@ -2,7 +2,7 @@
 
 > **新会话必读。**  
 > **PRISM** = Precision Retention by Importance Scoring for Multimodal。  
-> 包名暂为 `asdq`。
+> 包名 **`prism`**。
 
 ---
 
@@ -10,7 +10,7 @@
 
 | 阶段 | 目标 | 做什么 | 不做什么 |
 |------|------|--------|----------|
-| **Phase-1（当前）** | 弄清伪量化后的**任务精度** | Hessian → ASD 选列 → SpQR 风格 **pseudo-quant** → lmms-eval | real-int4、CUDA kernel、推理 bench、部署压缩体积 |
+| **Phase-1（当前）** | 弄清伪量化后的**任务精度** | Hessian → ASD 选列 → PRISM 分组混合精度 **pseudo-quant** → lmms-eval | real-int4、CUDA kernel、推理 bench、部署压缩体积 |
 | **Phase-2（以后）** | AI Infra / 真量化部署 | 再补 packing、kernel、显存/延迟 | — |
 
 方法参照：本地 `../owq`、`../SpQR-main`（伪量化/敏感列思路）；**不是**抄它们的推理部署栈进本阶段。
@@ -61,10 +61,13 @@ CMC / 多套 smooth 主攻 W–A，**不是 Phase-1 必做**。
 ## 5. 代码地图（Phase-1）
 
 ```text
-main_quant.py
-  → hessian_collector.collect_hessian_diag
-  → mixed_precision + metrics/asd.py
-  → quant_funcs / quantize.pseudo_quantize_model_weight
+main_quant.py  (--quant_mode offline|sequential)
+  offline:
+    → hessian_collector.collect_hessian_diag
+    → mixed_precision + metrics/asd.py
+    → quantize.pseudo_quantize_model_weight
+  sequential:
+    → sequential_pseudo_quant (local ASD → pseudo-quant → MSE on kept cols → error prop)
   → checkpoint.save_checkpoint   # float state_dict only
 
 main_eval.py
@@ -72,7 +75,7 @@ main_eval.py
   → lmms-eval
 ```
 
-已删除（勿再引用）：`real_quant.py`、`asdq/kernel/*`、`main_prompt_compare.py`、bench 推理脚本。
+已删除（勿再引用）：`real_quant.py`、`prism/kernel/*`（旧 asdq/kernel）、`main_prompt_compare.py`、bench 推理脚本。
 
 ---
 

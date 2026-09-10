@@ -60,7 +60,7 @@ for TASK in "${TASKS[@]}"; do
   cat > "$RESULTS_MD" << HEADER
 # PRISM Add-on Results: ${TASK}
 
-Model: ${MODEL_TYPE} | ${MODEL_ARGS} | W4 quantization | SpQR-style mixed precision
+Model: ${MODEL_TYPE} | ${MODEL_ARGS} | W4 quantization | PRISM mixed-precision
 Experiment: theta1=${THETA1}, theta2=${THETA2}, ratio=${RATIO}
 
 HEADER

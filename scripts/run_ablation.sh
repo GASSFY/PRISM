@@ -118,7 +118,7 @@ print('[multi-model] Set model and model_args in config')
     cat > "$RESULTS_MD" << HEADER
 # PRISM Ablation Study Results: ${TASK}
 
-Model: ${MODEL_TYPE} | ${MODEL_ARGS} | W4 quantization | SpQR-style mixed precision
+Model: ${MODEL_TYPE} | ${MODEL_ARGS} | W4 quantization | PRISM mixed-precision
 
 HEADER
 

@@ -19,7 +19,9 @@ asd_theta1: 0.8
 asd_theta2: 0.2
 asd_normalize: true
 asd_mixed_precision: true
-asd_high_precision_ratio: 0.1
+# Average bit: target_bit = (1-r)*asd_low_w_bit + r*asd_high_bit
+target_bit: 4.01
+asd_high_bit: 16.0
 asd_low_w_bit: 4
 
 run_process: true
@@ -27,6 +29,10 @@ scale_path: "scale_cache/prism_llava_7b_w4.pt"
 w_bit: 4
 w_group: 128
 pseudo_quant: true
+# offline | sequential
+quant_mode: offline
+mse_epochs: 1
+mse_lr: 1.0e-5
 
 tasks: "mmmu_val"
 limit: null

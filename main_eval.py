@@ -17,7 +17,7 @@ warnings.simplefilter("ignore", category=DeprecationWarning)
 from lmms_eval import evaluator, utils
 from lmms_eval.models import get_model
 from lmms_eval.tasks import TaskManager
-from asdq.quantization.eval_load import load_model_for_eval
+from prism.quantization.eval_load import load_model_for_eval
 
 
 def _handle_non_serializable(o):
@@ -36,9 +36,13 @@ def _append_results_md(md_path: str, args: argparse.Namespace, results: dict) ->
     if scale_path and os.path.exists(scale_path):
         theta1 = getattr(args, "asd_theta1", "N/A")
         theta2 = getattr(args, "asd_theta2", "N/A")
+        target_bit = getattr(args, "target_bit", "N/A")
         ratio = getattr(args, "asd_high_precision_ratio", "N/A")
         w_bit = getattr(args, "w_bit", getattr(args, "asd_low_w_bit", "N/A"))
-        section_title = f"\n## theta1={theta1}, theta2={theta2}, ratio={ratio}, w_bit={w_bit}\n"
+        section_title = (
+            f"\n## theta1={theta1}, theta2={theta2}, "
+            f"target_bit={target_bit}, ratio={ratio}, w_bit={w_bit}\n"
+        )
     else:
         section_title = "\n## FP16 baseline (no quantization)\n"
 

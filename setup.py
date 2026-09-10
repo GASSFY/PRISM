@@ -6,7 +6,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 setup(
-    name="asdq",
+    name="prism",
     version="0.1.0",
     description="PRISM Phase-1: pseudo-quant ASD column retention for multimodal models",
     author="PRISM",

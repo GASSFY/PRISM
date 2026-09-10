@@ -14,7 +14,7 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 
-from asdq.models.llava_onevision.dataset import (
+from prism.models.llava_onevision.dataset import (
     _add_speaker_and_signal,
     _mask_targets,
     _tokenize_fn,

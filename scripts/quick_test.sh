@@ -41,7 +41,7 @@ python main_quant.py \
   --asd_mixed_precision \
   --asd_theta1 0.8 \
   --asd_theta2 0.2 \
-  --asd_high_precision_ratio 0.01 \
+  --target_bit 4.01 \
   --asd_low_w_bit 4 \
   --scale_path "${SCALE_PATH}"
 

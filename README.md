@@ -2,10 +2,10 @@
 
 **PRISM**: Precision Retention by Importance Scoring for Multimodal
 
-Phase-1：仅权重 **伪量化**（ASD 选列 + SpQR 风格分组），用 lmms-eval 测多模态精度。  
+Phase-1：仅权重 **伪量化**（ASD 选列 + 分组混合精度保列），用 lmms-eval 测多模态精度。  
 真量化部署 / CUDA kernel / 推理加速 → **后续阶段**，本仓库暂不包含。
 
-> 代码底座源自 ASDQ；包名暂为 `asdq`。  
+> 代码底座源自 ASDQ；包名 **`prism`**。  
 > 新会话：[docs/SESSION_START.md](docs/SESSION_START.md) → [docs/RESEARCH_HANDOFF.md](docs/RESEARCH_HANDOFF.md)
 
 方法近邻（精度研究）：本地 `../owq`、`../SpQR-main`。
@@ -43,7 +43,7 @@ python main_quant.py --config configs/default.yaml
 python main_eval.py --config configs/default.yaml
 ```
 
-关键项：`asd_theta1` / `asd_theta2`、`asd_high_precision_ratio`、`w_group`、`pseudo_quant: true`。
+关键项：`asd_theta1` / `asd_theta2`、`target_bit`（平均比特预算）、`w_group`、`pseudo_quant: true`。
 
 ---
 
@@ -53,7 +53,7 @@ python main_eval.py --config configs/default.yaml
 PRISM/
 ├── main_quant.py / main_eval.py
 ├── configs/
-├── asdq/          # calibration, metrics, quantization, models
+├── prism/          # calibration, metrics, quantization, models
 ├── docs/
 └── scripts/       # 消融等（伪量化）
 ```

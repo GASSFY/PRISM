@@ -11,8 +11,8 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 
 from .constants import IMG_CONTEXT_TOKEN
 from .dataset import build_transform, dynamic_preprocess, preprocess, preprocess_internlm, preprocess_mpt, preprocess_phi3
-from asdq.models.base import BaseModel
-from asdq.utils.registry import MODEL_REGISTRY
+from prism.models.base import BaseModel
+from prism.utils.registry import MODEL_REGISTRY
 
 
 @MODEL_REGISTRY.register("internvl2")

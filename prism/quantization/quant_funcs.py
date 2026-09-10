@@ -1,4 +1,4 @@
-"""Minimal quantization helpers (RTN-style) for ASDQ. No dependency on MBQ."""
+"""Minimal quantization helpers (RTN-style) for PRISM. No dependency on MBQ."""
 from __future__ import annotations
 
 from typing import Set, Tuple
@@ -75,7 +75,7 @@ def pseudo_quantize_weight_per_column(
     return result
 
 
-# ---------- SpQR-style: 一行×一坨列 分组，组内剔除「保存精度」后算 scale/zero，推理时合并 outlier ----------
+# ---------- PRISM keep-column: 一行×一组列；组内剔除保列后算 scale/zero，再写回保列 ----------
 
 
 def _get_scale_zero_per_row(
@@ -129,7 +129,7 @@ def _fill_saved_with_mean(
     saved_mask: torch.Tensor,
 ) -> torch.Tensor:
     """
-    组内把「保存精度」位置用该行非保存位置的均值填上（SpQR 方式 1）。
+    组内把保列位置用该行非保列位置的均值填上（再 fit scale/zero）。
     group (out_f, g), saved_mask (out_f, g) bool，True = 保存精度。
 
     saved_mask 是按列定义的（同一列所有行相同），因此可以向量化。
@@ -147,7 +147,7 @@ def _fill_saved_with_mean(
 
 
 @torch.no_grad()
-def pseudo_quantize_weight_spqr_style(
+def pseudo_quantize_weight_prism(
     weight: torch.Tensor,
     q_group_size: int,
     high_precision_columns: Set[Tuple[str, int]],
@@ -156,7 +156,7 @@ def pseudo_quantize_weight_spqr_style(
     zero_point: bool = True,
 ) -> torch.Tensor:
     """
-    SpQR 风格混合精度：分组 = 一行×一坨列；组内若有保存精度列则剔除后算 scale/zero（用非保存位置均值填充再 fit），
+    PRISM 混合精度：分组 = 一行×一组列；组内若有保列则剔除后算 scale/zero（用非保列均值填充再 fit），
     量化后用原权重重写保存位置；返回合并后的权重（推理时等价于 量化部分 + outlier 加回）。
 
     weight: (out_features, in_features)

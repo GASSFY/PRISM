@@ -1,4 +1,4 @@
-"""Weight pseudo quantization for LLaVA-like models (SpQR-style mixed precision)."""
+"""Weight pseudo quantization for LLaVA-like models (PRISM mixed-precision)."""
 from __future__ import annotations
 
 from typing import Set, Tuple
@@ -10,7 +10,7 @@ from tqdm import tqdm
 from .quant_funcs import (
     pseudo_quantize_tensor,
     pseudo_quantize_weight_per_column,
-    pseudo_quantize_weight_spqr_style,
+    pseudo_quantize_weight_prism,
 )
 
 
@@ -49,7 +49,7 @@ def pseudo_quantize_model_weight(
     """
     In-place pseudo quantize Linear weights in model (language blocks only).
 
-    If high_precision_columns is provided, uses SpQR-style mixed precision:
+    If high_precision_columns is provided, uses PRISM mixed-precision:
     group = one row x q_group_size columns; outlier columns are excluded when
     fitting scale/zero (replaced by row mean), then original float values are
     written back after quantization. The output weight is the merged result of
@@ -68,7 +68,7 @@ def pseudo_quantize_model_weight(
             w = m.weight.data
             if use_mixed and high_precision_columns is not None:
                 key = _linear_layer_key(i, n)
-                m.weight.data = pseudo_quantize_weight_spqr_style(
+                m.weight.data = pseudo_quantize_weight_prism(
                     w,
                     q_group_size=q_group_size,
                     high_precision_columns=high_precision_columns,

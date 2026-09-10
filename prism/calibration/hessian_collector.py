@@ -17,7 +17,7 @@ import torch
 import torch.nn as nn
 from tqdm import tqdm
 
-from asdq.quantization.quantize import get_blocks, get_named_linears, _linear_layer_key
+from prism.quantization.quantize import get_blocks, get_named_linears, _linear_layer_key
 
 
 def move_embed(model: nn.Module, device: str) -> None:
@@ -44,34 +44,17 @@ def move_embed(model: nn.Module, device: str) -> None:
         pass
 
 
-@torch.no_grad()
-def collect_hessian_diag(
+def capture_first_block_inputs(
     model_wrapper,
     forward_kwargs_list: list[dict],
-) -> dict[str, torch.Tensor]:
-    """Collect Hessian diagonal for every Linear layer via layer-by-layer forward.
-
-    Follows the MBQ ``run_mbq`` pattern (Catcher -> layer-by-layer -> CPU offload)
-    to keep GPU memory bounded to a single transformer block at a time.
-
-    Args:
-        model_wrapper: process_model object with ``.model``, ``.forward()``,
-            ``.to_cuda()`` and ``.to_cpu()`` methods (same role as MBQ's
-            ``model`` argument in ``run_mbq``).
-        forward_kwargs_list: list of mini-batch dicts, each containing keys
-            accepted by ``model_wrapper.forward()`` (e.g. inputs_embeds,
-            labels, attention_mask).  Tensors should reside on CPU.
-
-    Returns:
-        ``{layer_key: diag_H}`` where ``diag_H`` is shape ``[C] = E[x_c^2]``.
+) -> tuple[list[torch.Tensor], list[dict]]:
+    """
+    Run Catcher on block 0 to cache per-mini-batch hidden states + kwargs (on CPU).
+    Leaves the model on CPU with embed offloaded.
     """
     model = model_wrapper.model
     layers = get_blocks(model)
 
-    # ------------------------------------------------------------------ #
-    # Phase 1: Catcher – capture first-block inputs per mini-batch       #
-    # (cf. MBQ pre_quant.py:229-259)                                     #
-    # ------------------------------------------------------------------ #
     all_inps: list[torch.Tensor] = []
     all_layer_kwargs: list[dict] = []
 
@@ -105,17 +88,43 @@ def collect_hessian_diag(
         torch.cuda.empty_cache()
 
     model_wrapper.to_cpu()
-    layers[0] = layers[0].module  # restore original block
+    layers[0] = layers[0].module
     layers[0] = layers[0].cpu()
     move_embed(model, "cpu")
 
     gc.collect()
     torch.cuda.empty_cache()
+    return all_inps, all_layer_kwargs
 
-    # ------------------------------------------------------------------ #
-    # Phase 2: layer-by-layer forward with hooks                         #
-    # (cf. MBQ pre_quant.py:317-493)                                     #
-    # ------------------------------------------------------------------ #
+
+@torch.no_grad()
+def collect_hessian_diag(
+    model_wrapper,
+    forward_kwargs_list: list[dict],
+) -> dict[str, torch.Tensor]:
+    """Collect Hessian diagonal for every Linear layer via layer-by-layer forward.
+
+    Follows the MBQ ``run_mbq`` pattern (Catcher -> layer-by-layer -> CPU offload)
+    to keep GPU memory bounded to a single transformer block at a time.
+
+    Args:
+        model_wrapper: process_model object with ``.model``, ``.forward()``,
+            ``.to_cuda()`` and ``.to_cpu()`` methods (same role as MBQ's
+            ``model`` argument in ``run_mbq``).
+        forward_kwargs_list: list of mini-batch dicts, each containing keys
+            accepted by ``model_wrapper.forward()`` (e.g. inputs_embeds,
+            labels, attention_mask).  Tensors should reside on CPU.
+
+    Returns:
+        ``{layer_key: diag_H}`` where ``diag_H`` is shape ``[C] = E[x_c^2]``.
+    """
+    model = model_wrapper.model
+    layers = get_blocks(model)
+
+    all_inps, all_layer_kwargs = capture_first_block_inputs(
+        model_wrapper, forward_kwargs_list,
+    )
+
     sum_x2: dict[str, torch.Tensor] = {}
     count: dict[str, int] = {}
 
@@ -137,7 +146,7 @@ def collect_hessian_diag(
                 count[key] += n
         return hook
 
-    for layer_idx in tqdm(range(len(layers)), desc="[ASDQ] Collecting Hessian diag..."):
+    for layer_idx in tqdm(range(len(layers)), desc="[PRISM] Collecting Hessian diag..."):
         layer = layers[layer_idx].cuda()
 
         handles = []
