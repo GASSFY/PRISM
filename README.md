@@ -6,7 +6,7 @@ Phase-1：仅权重 **伪量化**（ASD 选列 + 分组混合精度保列），�
 真量化部署 / CUDA kernel / 推理加速 → **后续阶段**，本仓库暂不包含。
 
 > 代码底座源自 ASDQ；包名 **`prism`**。  
-> 新会话：[docs/SESSION_START.md](docs/SESSION_START.md) → [docs/RESEARCH_HANDOFF.md](docs/RESEARCH_HANDOFF.md)
+> 算法：[docs/ALGORITHM.md](docs/ALGORITHM.md) · 实验索引：[docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)
 
 方法近邻（精度研究）：本地 `../owq`、`../SpQR-main`。
 
@@ -16,9 +16,12 @@ Phase-1：仅权重 **伪量化**（ASD 选列 + 分组混合精度保列），�
 
 | 文档 | 用途 |
 |------|------|
-| [docs/SESSION_START.md](docs/SESSION_START.md) | 最短入口 |
-| [docs/RESEARCH_HANDOFF.md](docs/RESEARCH_HANDOFF.md) | 共识与实验路线 |
-| [docs/ALGORITHM.md](docs/ALGORITHM.md) | Phase-1 算法 |
+| [docs/ALGORITHM.md](docs/ALGORITHM.md) | 算法说明 + 核心代码地图 |
+| [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) | 实验目录（索引） |
+| [docs/exp_offline_vs_sequential.md](docs/exp_offline_vs_sequential.md) | Offline vs Sequential 实验记录 |
+| [docs/exp_holdout_vs_full.md](docs/exp_holdout_vs_full.md) | Holdout vs Full α 协议实验记录 |
+
+本地实验产物在 `experiments/`（默认不推远程）。
 
 ---
 
@@ -26,7 +29,7 @@ Phase-1：仅权重 **伪量化**（ASD 选列 + 分组混合精度保列），�
 
 ```bash
 conda create -n prism python=3.10 -y && conda activate prism
-cd E:\LLM-learning\PRISM
+cd /path/to/PRISM
 pip install -r requirements.txt && pip install -e .
 
 # 另装 LLaVA-NeXT、lmms-eval（本仓不内嵌）
@@ -39,11 +42,12 @@ pip install -r requirements.txt && pip install -e .
 ## 运行（伪量化）
 
 ```bash
-python main_quant.py --config configs/default.yaml
-python main_eval.py --config configs/default.yaml
+bash scripts/quant.sh configs/default.yaml
+bash scripts/eval.sh  configs/default.yaml
 ```
 
-关键项：`asd_theta1` / `asd_theta2`、`target_bit`（平均比特预算）、`w_group`、`pseudo_quant: true`。
+等价于直接调用 `main_quant.py` / `main_eval.py`。  
+关键项：`asd_theta1` / `asd_theta2`、`target_bit` 或 `asd_high_precision_ratio`、`w_group`、`pseudo_quant: true`、`quant_mode: offline|sequential`。
 
 ---
 
@@ -53,7 +57,8 @@ python main_eval.py --config configs/default.yaml
 PRISM/
 ├── main_quant.py / main_eval.py
 ├── configs/
-├── prism/          # calibration, metrics, quantization, models
-├── docs/
-└── scripts/       # 消融等（伪量化）
+├── prism/           # calibration, metrics, quantization, models
+├── docs/            # ALGORITHM + EXPERIMENTS 索引 + 实验笔记
+├── scripts/         # quant.sh / eval.sh（正式入口）
+└── experiments/     # 本地实验产物与实验脚本（gitignore）
 ```

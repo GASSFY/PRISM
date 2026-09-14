@@ -12,6 +12,7 @@ plus one transformer block on GPU at a time.
 from __future__ import annotations
 
 import gc
+import time
 
 import torch
 import torch.nn as nn
@@ -65,17 +66,34 @@ def capture_first_block_inputs(
 
         def forward(self, inp, **kwargs):
             all_inps.append(inp.detach().cpu())
-            saved_kw = {
-                k: v.detach().cpu() if isinstance(v, torch.Tensor) else v
-                for k, v in kwargs.items()
-            }
+            # Drop mutable KV cache; clone tensors so later block forwards
+            # cannot poison shared Catcher state (mask length S vs 2S).
+            saved_kw = {}
+            for k, v in kwargs.items():
+                if k in ("past_key_value", "past_key_values"):
+                    continue
+                if isinstance(v, torch.Tensor):
+                    saved_kw[k] = v.detach().cpu().clone()
+                elif isinstance(v, tuple) and v and all(isinstance(x, torch.Tensor) for x in v):
+                    saved_kw[k] = tuple(x.detach().cpu().clone() for x in v)
+                else:
+                    saved_kw[k] = v
+            saved_kw["use_cache"] = False
+            saved_kw["past_key_value"] = None
             all_layer_kwargs.append(saved_kw)
             raise ValueError
 
     layers[0] = Catcher(layers[0])
 
+    total_batches = len(forward_kwargs_list)
+    report_every = max(1, total_batches // 4)
+    capture_t0 = time.perf_counter()
+    print(
+        f"[PRISM] Calibration forward capture started: {total_batches} batches",
+        flush=True,
+    )
     model_wrapper.to_cuda()
-    for kwargs in forward_kwargs_list:
+    for batch_idx, kwargs in enumerate(forward_kwargs_list, start=1):
         batch = {
             k: v.cuda() if isinstance(v, torch.Tensor) else v
             for k, v in kwargs.items()
@@ -86,6 +104,12 @@ def capture_first_block_inputs(
             pass
         del batch
         torch.cuda.empty_cache()
+        if batch_idx % report_every == 0 or batch_idx == total_batches:
+            print(
+                f"[PRISM] Calibration forward capture "
+                f"{batch_idx}/{total_batches}",
+                flush=True,
+            )
 
     model_wrapper.to_cpu()
     layers[0] = layers[0].module
@@ -94,6 +118,12 @@ def capture_first_block_inputs(
 
     gc.collect()
     torch.cuda.empty_cache()
+    print(
+        f"[PRISM] Calibration forward capture done: "
+        f"{len(all_inps)} cached batches, "
+        f"time={time.perf_counter() - capture_t0:.1f}s",
+        flush=True,
+    )
     return all_inps, all_layer_kwargs
 
 
@@ -157,11 +187,18 @@ def collect_hessian_diag(
         new_inps = []
         for batch_idx in range(len(all_inps)):
             inp = all_inps[batch_idx].cuda()
-            kw = {
-                k: v.cuda() if isinstance(v, torch.Tensor) else v
-                for k, v in all_layer_kwargs[batch_idx].items()
-            }
+            kw = {}
+            for k, v in all_layer_kwargs[batch_idx].items():
+                if k in ("past_key_value", "past_key_values"):
+                    continue
+                if isinstance(v, torch.Tensor):
+                    kw[k] = v.detach().to("cuda", copy=True)
+                elif isinstance(v, tuple) and v and all(isinstance(x, torch.Tensor) for x in v):
+                    kw[k] = tuple(x.detach().to("cuda", copy=True) for x in v)
+                else:
+                    kw[k] = v
             kw["use_cache"] = False
+            kw["past_key_value"] = None
             out = layer(inp, **kw)[0]
             new_inps.append(out.detach().cpu())
             del inp, out, kw

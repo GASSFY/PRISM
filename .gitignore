@@ -37,20 +37,24 @@ ENV/
 .DS_Store
 Thumbs.db
 
-# Project
+# Project configs (keep examples only)
+configs/*
+!configs/*.example
+
+# Local experiment workspace (logs, checkpoints, ad-hoc scripts)
+experiments/
+
+# Legacy / local caches
 *.log
 scale_cache/
 _paper_cache/
-configs/*
-!configs/*.example
 eval_results/
 eval_new_results/
-
-# LLAVA module
-LLaVA-NeXT/
-lmms-eval/
-
 old_eval_results/
 result_add/
+
+# External deps (not vendored)
+LLaVA-NeXT/
+lmms-eval/
 
 prep_pip_freeze_before_gptq.txt

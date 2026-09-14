@@ -1,6 +1,7 @@
 """Weight pseudo quantization for LLaVA-like models (PRISM mixed-precision)."""
 from __future__ import annotations
 
+import time
 from typing import Set, Tuple
 
 import torch
@@ -45,6 +46,7 @@ def pseudo_quantize_model_weight(
     zero_point: bool = True,
     high_precision_columns: Set[Tuple[str, int]] | None = None,
     low_w_bit: int = 4,
+    progress_label: str = "PRISM",
 ):
     """
     In-place pseudo quantize Linear weights in model (language blocks only).
@@ -61,10 +63,16 @@ def pseudo_quantize_model_weight(
     if use_mixed and q_group_size <= 0:
         q_group_size = 128
 
-    for i in tqdm(range(len(layers)), desc="pseudo weight quantization..."):
+    total_layers = len(layers)
+    progress = tqdm(
+        range(total_layers),
+        desc=f"[{progress_label}] Pseudo-quantizing blocks",
+    )
+    for i in progress:
+        block_t0 = time.perf_counter()
         named_linears = get_named_linears(layers[i])
+        progress.set_postfix_str(f"block={i + 1}/{total_layers}")
         for n, m in named_linears.items():
-            print(f"  [Block {i}] Quantizing {n} {tuple(m.weight.shape)}", flush=True)
             w = m.weight.data
             if use_mixed and high_precision_columns is not None:
                 key = _linear_layer_key(i, n)
@@ -78,3 +86,9 @@ def pseudo_quantize_model_weight(
                 )
             else:
                 m.weight.data = pseudo_quantize_tensor(w, n_bits=w_bit, **q_config)
+        print(
+            f"[{progress_label}] Quantized block {i + 1}/{total_layers}: "
+            f"{len(named_linears)} linear layers, "
+            f"{time.perf_counter() - block_t0:.2f}s",
+            flush=True,
+        )

@@ -7,6 +7,7 @@ Contrasts with the offline path (global FP Hessian → one-shot pseudo-quant).
 from __future__ import annotations
 
 import gc
+import time
 from typing import Set, Tuple
 
 import torch
@@ -23,6 +24,27 @@ from prism.quantization.quantize import (
     get_blocks,
     get_named_linears,
 )
+
+# Catcher may keep a shared Cache / past by reference; reusing it across
+# multiple block forwards doubles the effective KV length (mask S vs 2S).
+_SKIP_LAYER_KWARGS = frozenset({"past_key_value", "past_key_values"})
+
+
+def _prepare_layer_kwargs(raw: dict) -> dict:
+    """Copy layer kwargs to CUDA without carrying a mutable KV cache."""
+    kw: dict = {}
+    for k, v in raw.items():
+        if k in _SKIP_LAYER_KWARGS:
+            continue
+        if isinstance(v, torch.Tensor):
+            kw[k] = v.detach().to("cuda", copy=True)
+        elif isinstance(v, tuple) and v and all(isinstance(x, torch.Tensor) for x in v):
+            kw[k] = tuple(x.detach().to("cuda", copy=True) for x in v)
+        else:
+            kw[k] = v
+    kw["use_cache"] = False
+    kw["past_key_value"] = None
+    return kw
 
 
 def _accumulate_diag_h(
@@ -63,11 +85,7 @@ def _accumulate_diag_h(
     with torch.no_grad():
         for batch_idx in range(len(all_inps)):
             inp = all_inps[batch_idx].cuda()
-            kw = {
-                k: v.cuda() if isinstance(v, torch.Tensor) else v
-                for k, v in all_layer_kwargs[batch_idx].items()
-            }
-            kw["use_cache"] = False
+            kw = _prepare_layer_kwargs(all_layer_kwargs[batch_idx])
             _ = layer(inp, **kw)[0]
             del inp, kw
             torch.cuda.empty_cache()
@@ -88,17 +106,12 @@ def _cache_fp_outputs(
     with torch.no_grad():
         for batch_idx in range(len(all_inps)):
             inp = all_inps[batch_idx].cuda()
-            kw = {
-                k: v.cuda() if isinstance(v, torch.Tensor) else v
-                for k, v in all_layer_kwargs[batch_idx].items()
-            }
-            kw["use_cache"] = False
+            kw = _prepare_layer_kwargs(all_layer_kwargs[batch_idx])
             out = layer(inp, **kw)[0]
             outs.append(out.detach().float().cpu())
             del inp, out, kw
             torch.cuda.empty_cache()
     return outs
-
 
 def _pseudo_quantize_block(
     layer: nn.Module,
@@ -161,17 +174,14 @@ def _mse_optimize_kept_columns(
     layer.train(False)  # keep dropout/etc off; grads still flow to weights
 
     last_mean = float("nan")
-    for _epoch in range(mse_epochs):
+    for epoch_idx in range(mse_epochs):
+        epoch_t0 = time.perf_counter()
         total = 0.0
         n_tok = 0
         for batch_idx in range(len(all_inps)):
             inp = all_inps[batch_idx].cuda()
             target = fp_outs[batch_idx].cuda()
-            kw = {
-                k: v.cuda() if isinstance(v, torch.Tensor) else v
-                for k, v in all_layer_kwargs[batch_idx].items()
-            }
-            kw["use_cache"] = False
+            kw = _prepare_layer_kwargs(all_layer_kwargs[batch_idx])
 
             out = layer(inp, **kw)[0]
             loss = F.mse_loss(out.float(), target.float())
@@ -193,6 +203,12 @@ def _mse_optimize_kept_columns(
             torch.cuda.empty_cache()
 
         last_mean = total / max(n_tok, 1)
+        print(
+            f"    [Sequential MSE] epoch {epoch_idx + 1}/{mse_epochs}: "
+            f"mse={last_mean:.6e}, tokens={n_tok}, "
+            f"time={time.perf_counter() - epoch_t0:.1f}s",
+            flush=True,
+        )
 
     for linear in named.values():
         linear.weight.requires_grad_(False)
@@ -210,11 +226,7 @@ def _forward_block_to_next_inputs(
     new_inps: list[torch.Tensor] = []
     for batch_idx in range(len(all_inps)):
         inp = all_inps[batch_idx].cuda()
-        kw = {
-            k: v.cuda() if isinstance(v, torch.Tensor) else v
-            for k, v in all_layer_kwargs[batch_idx].items()
-        }
-        kw["use_cache"] = False
+        kw = _prepare_layer_kwargs(all_layer_kwargs[batch_idx])
         out = layer(inp, **kw)[0]
         new_inps.append(out.detach().cpu())
         del inp, out, kw
