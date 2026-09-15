@@ -22,9 +22,9 @@
 
 ## 结论
 
-Offline 与历史 ASDQ 参考（~0.66）对齐；Sequential 在本设定下与 Offline 基本打平（差约 0.001，落在 stderr 内）。Phase-1 主叙事继续以 **offline 全局列分配** 为主，sequential 作对照。
+Offline 与历史 ASDQ 参考（~0.66）对齐；Sequential 在本设定下与 Offline 基本打平（差约 0.001，落在 stderr 内）。因此 **删除 sequential 主路径**，Phase-1 只保留 offline 全局列分配。
 
 ## 复现
 
-本地产物：`experiments/offline_vs_sequential/`（configs / logs / results；scale 可能已清理）。  
-正式入口仍用仓库根目录 `scripts/quant.sh` / `scripts/eval.sh`，配置见该实验目录下的 `configs/`。
+本地产物：`experiments/offline_vs_sequential/`（configs / logs / results；scale 可能已清理）。目录内 `NOTES.md` 记录了对应代码删除说明。  
+正式入口仍用仓库根目录 `scripts/quant.sh` / `scripts/eval.sh`（仅 offline）。

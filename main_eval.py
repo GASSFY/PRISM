@@ -34,13 +34,12 @@ def _append_results_md(md_path: str, args: argparse.Namespace, results: dict) ->
     """Append evaluation results to a markdown file."""
     scale_path = getattr(args, "scale_path", None)
     if scale_path and os.path.exists(scale_path):
-        theta1 = getattr(args, "asd_theta1", "N/A")
-        theta2 = getattr(args, "asd_theta2", "N/A")
+        modality_theta = getattr(args, "modality_theta", "N/A")
         target_bit = getattr(args, "target_bit", "N/A")
         ratio = getattr(args, "asd_high_precision_ratio", "N/A")
         w_bit = getattr(args, "w_bit", getattr(args, "asd_low_w_bit", "N/A"))
         section_title = (
-            f"\n## theta1={theta1}, theta2={theta2}, "
+            f"\n## modality_theta={modality_theta}, "
             f"target_bit={target_bit}, ratio={ratio}, w_bit={w_bit}\n"
         )
     else:

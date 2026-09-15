@@ -21,8 +21,8 @@
 
 ## 结论
 
-下游上 A 略高或持平（RWQA 差 ~0.001，stderr 内；MMMU 相同）。当前证据下 **不切开更简单且不更差**，后续默认采用协议 A。α 搜索不是训练 epoch，而是候选点上的伪量化 + 前向 ΔCE。
+下游上 A 略高或持平（RWQA 差 ~0.001，stderr 内；MMMU 相同）。当前证据下 **不切开更简单且不更差**，后续默认采用协议 A，并已从主代码移除 hold-out 搜参协议。
 
 ## 复现
 
-本地产物：`experiments/holdout_vs_full/`（含 `scripts/compare_holdout_vs_full_ce.py`、configs、logs、scale_cache）。
+本地产物：`experiments/holdout_vs_full/`（含 `scripts/compare_holdout_vs_full_ce.py`、configs、logs、scale_cache）。目录内 `NOTES.md` 记录了对应代码删除说明。

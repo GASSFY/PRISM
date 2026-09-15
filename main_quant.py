@@ -1,9 +1,8 @@
 """
-PRISM Phase-1: ASD column selection + mixed-precision *pseudo* quantization.
+PRISM Phase-1: K-based column selection + mixed-precision *pseudo* quantization.
 
-Two routes (see --quant_mode):
-  offline     — FP calibrate once → global ASD → one-shot pseudo-quant
-  sequential  — per block: local ASD → pseudo-quant → MSE on kept cols → error prop
+Offline only: FP calibrate once → global K ranking → one-shot pseudo-quant.
+Optional cross-modal fusion: K = θ·norm(K^T) + (1-θ)·norm(K^V).
 """
 import argparse
 import os
@@ -20,7 +19,6 @@ from lmms_eval.models import get_model
 from prism.models import get_process_model
 from prism.calibration.coco_vl import get_multimodal_calib_dataset
 from prism.calibration.hessian_collector import collect_hessian_diag
-from prism.metrics import asd_kwargs_from_config
 from prism.quantization.quantize import pseudo_quantize_model_weight
 from prism.quantization.checkpoint import load_checkpoint, save_checkpoint
 from prism.quantization.mixed_precision import (
@@ -28,13 +26,12 @@ from prism.quantization.mixed_precision import (
     resolve_high_precision_ratio,
     select_high_precision_columns,
 )
-from prism.quantization.sequential_pseudo_quant import sequential_pseudo_quantize_model
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         formatter_class=argparse.RawTextHelpFormatter,
-        description="PRISM Phase-1: offline vs sequential pseudo-quant.",
+        description="PRISM Phase-1: offline pseudo-quant with global K column keep.",
     )
     parser.add_argument("--config", default="", help="Path to yaml config (overrides CLI)")
     parser.add_argument("--model", default="llava_onevision")
@@ -54,19 +51,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--w_bit", type=int, default=4)
     parser.add_argument("--w_group", type=int, default=128)
     parser.add_argument("--pseudo_quant", action="store_true", default=True)
-    parser.add_argument(
-        "--quant_mode",
-        type=str,
-        default="offline",
-        choices=["offline", "sequential"],
-        help="offline: one-shot after global calib; sequential: MSE + error propagation",
-    )
-    parser.add_argument("--mse_epochs", type=int, default=1, help="Sequential only: AdamW epochs per block")
-    parser.add_argument("--mse_lr", type=float, default=1e-5, help="Sequential only: AdamW lr for kept columns")
-    # ASD mixed precision
+    # mixed precision keep-set
     parser.add_argument("--asd_mixed_precision", action="store_true", default=True)
-    parser.add_argument("--asd_theta1", type=float, default=0.8)
-    parser.add_argument("--asd_theta2", type=float, default=0.2)
     parser.add_argument(
         "--target_bit",
         type=float,
@@ -86,6 +72,17 @@ def parse_args() -> argparse.Namespace:
         help="Legacy override: direct keep-column fraction. Ignored if target_bit is set.",
     )
     parser.add_argument("--asd_low_w_bit", type=int, default=4)
+    parser.add_argument(
+        "--split_modality",
+        action="store_true",
+        help="Collect separate vision/text activation energies (needs vision_mask).",
+    )
+    parser.add_argument(
+        "--modality_theta",
+        type=float,
+        default=None,
+        help="Fusion weight on TEXT: K = θ·K^T + (1-θ)·K^V. Requires --split_modality.",
+    )
     args = parser.parse_args()
     return args
 
@@ -131,18 +128,60 @@ def cli_main(args: Union[argparse.Namespace, None] = None) -> None:
         _run_single(args)
 
 
-def _run_offline(args: argparse.Namespace, process_model, forward_kwargs_list) -> None:
-    """Route A: FP Hessian → global ASD → one-shot pseudo-quant."""
+def _run_offline(
+    args: argparse.Namespace,
+    process_model,
+    forward_kwargs_list,
+    metadata_list=None,
+) -> None:
+    """FP energy → global K ranking → one-shot pseudo-quant."""
     high_precision_columns = None
     ratio = 0.0
     if getattr(args, "asd_mixed_precision", True) and forward_kwargs_list is not None:
-        hessian_diag = collect_hessian_diag(process_model, forward_kwargs_list)
-        print(f"[PRISM] Hessian diag collected for {len(hessian_diag)} layers.")
+        split_modality = bool(getattr(args, "split_modality", False))
+        modality_theta = getattr(args, "modality_theta", None)
+        if modality_theta is not None and not split_modality:
+            raise ValueError("modality_theta requires --split_modality")
 
-        asd_kw = asd_kwargs_from_config(vars(args))
-        global_asd_list = compute_global_asd_list(
-            process_model.model, hessian_diag, **asd_kw,
+        energy = collect_hessian_diag(
+            process_model,
+            forward_kwargs_list,
+            metadata_list=metadata_list if split_modality else None,
+            split_modality=split_modality,
         )
+
+        if split_modality:
+            assert isinstance(energy, dict) and "vision" in energy and "text" in energy
+            print(
+                f"[PRISM] Modality energy collected: "
+                f"mixed={len(energy['mixed'])}, "
+                f"vision={len(energy['vision'])}, "
+                f"text={len(energy['text'])} layers."
+            )
+            if modality_theta is None:
+                raise ValueError(
+                    "split_modality offline path requires modality_theta "
+                    "(use 0.5 for equal fusion, or run the θ search script)."
+                )
+            global_asd_list = compute_global_asd_list(
+                process_model.model,
+                hessian_diag=None,
+                hessian_vision=energy["vision"],
+                hessian_text=energy["text"],
+                modality_theta=float(modality_theta),
+            )
+            print(
+                f"[PRISM] Modality fusion: θ={float(modality_theta):.3f} "
+                f"(K = θ·K^T + (1-θ)·K^V)"
+            )
+        else:
+            assert isinstance(energy, dict)
+            print(f"[PRISM] Activation energy collected for {len(energy)} layers.")
+            global_asd_list = compute_global_asd_list(
+                process_model.model,
+                energy,
+            )
+
         ratio = _resolve_keep_ratio(args)
         high_precision_columns = select_high_precision_columns(global_asd_list, ratio)
         print(
@@ -164,7 +203,7 @@ def _run_offline(args: argparse.Namespace, process_model, forward_kwargs_list) -
             high_precision_columns=high_precision_columns,
             low_w_bit=getattr(args, "asd_low_w_bit", 4),
         )
-        print("[PRISM] Offline pseudo quantization applied (ASD mixed precision).")
+        print("[PRISM] Offline pseudo quantization applied (K mixed precision).")
     else:
         pseudo_quantize_model_weight(
             process_model.model,
@@ -173,38 +212,6 @@ def _run_offline(args: argparse.Namespace, process_model, forward_kwargs_list) -
             zero_point=True,
         )
         print(f"[PRISM] Offline pseudo quantization applied (uniform w_bit={args.w_bit}).")
-
-
-def _run_sequential(args: argparse.Namespace, process_model, forward_kwargs_list) -> None:
-    """Route B: per-block local ASD → pseudo-quant → MSE on kept cols → error prop."""
-    if forward_kwargs_list is None:
-        raise ValueError("sequential mode requires calibration data (data_path + image_folder).")
-    if not getattr(args, "asd_mixed_precision", True):
-        raise ValueError("sequential mode currently requires asd_mixed_precision=True.")
-
-    ratio = _resolve_keep_ratio(args)
-    asd_kw = asd_kwargs_from_config(vars(args))
-    print(
-        f"[PRISM] Sequential: target_bit={getattr(args, 'target_bit', None)}, "
-        f"ratio={ratio:.6f}, mse_epochs={args.mse_epochs}, mse_lr={args.mse_lr}"
-    )
-    stats = sequential_pseudo_quantize_model(
-        process_model,
-        forward_kwargs_list,
-        theta1=asd_kw["theta1"],
-        theta2=asd_kw["theta2"],
-        keep_ratio=ratio,
-        w_bit=args.w_bit,
-        q_group_size=args.w_group,
-        low_w_bit=getattr(args, "asd_low_w_bit", 4),
-        zero_point=True,
-        mse_epochs=int(getattr(args, "mse_epochs", 1)),
-        mse_lr=float(getattr(args, "mse_lr", 1e-5)),
-    )
-    print(
-        f"[PRISM] Sequential done: total_kept={stats['total_kept']} "
-        f"across {len(stats['blocks'])} blocks."
-    )
 
 
 def _run_single(args: argparse.Namespace) -> None:
@@ -228,9 +235,8 @@ def _run_single(args: argparse.Namespace) -> None:
         return
 
     forward_kwargs_list, metadata_list = None, None
-    del metadata_list
     if args.calib_data == "coco" and args.data_path and args.image_folder:
-        forward_kwargs_list, _ = get_multimodal_calib_dataset(
+        forward_kwargs_list, metadata_list = get_multimodal_calib_dataset(
             data_path=args.data_path,
             image_folder=args.image_folder,
             model=process_model,
@@ -244,16 +250,10 @@ def _run_single(args: argparse.Namespace) -> None:
     if not args.pseudo_quant:
         raise ValueError("Phase-1 PRISM requires pseudo_quant=True (real-int4 deploy path removed).")
 
-    quant_mode = getattr(args, "quant_mode", "offline")
     t0 = time.perf_counter()
-    if quant_mode == "offline":
-        _run_offline(args, process_model, forward_kwargs_list)
-    elif quant_mode == "sequential":
-        _run_sequential(args, process_model, forward_kwargs_list)
-    else:
-        raise ValueError(f"Unknown quant_mode={quant_mode}")
+    _run_offline(args, process_model, forward_kwargs_list, metadata_list)
     elapsed = time.perf_counter() - t0
-    print(f"[PRISM] Quant wall time: {elapsed:.1f}s (mode={quant_mode})")
+    print(f"[PRISM] Quant wall time: {elapsed:.1f}s (mode=offline)")
 
     if args.scale_path:
         save_checkpoint(lm._model, args.scale_path)

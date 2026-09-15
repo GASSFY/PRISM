@@ -2,7 +2,7 @@
 
 **PRISM**: Precision Retention by Importance Scoring for Multimodal
 
-Phase-1：仅权重 **伪量化**（ASD 选列 + 分组混合精度保列），用 lmms-eval 测多模态精度。  
+Phase-1：仅权重 **伪量化**（全局 \(K\) 选列 + 分组混合精度保列），用 lmms-eval 测多模态精度。  
 真量化部署 / CUDA kernel / 推理加速 → **后续阶段**，本仓库暂不包含。
 
 > 代码底座源自 ASDQ；包名 **`prism`**。  
@@ -18,10 +18,11 @@ Phase-1：仅权重 **伪量化**（ASD 选列 + 分组混合精度保列），�
 |------|------|
 | [docs/ALGORITHM.md](docs/ALGORITHM.md) | 算法说明 + 核心代码地图 |
 | [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) | 实验目录（索引） |
-| [docs/exp_offline_vs_sequential.md](docs/exp_offline_vs_sequential.md) | Offline vs Sequential 实验记录 |
-| [docs/exp_holdout_vs_full.md](docs/exp_holdout_vs_full.md) | Holdout vs Full α 协议实验记录 |
+| [docs/exp_modality_fusion_ablation.md](docs/exp_modality_fusion_ablation.md) | 跨模态 θ 融合消融 |
+| [docs/exp_offline_vs_sequential.md](docs/exp_offline_vs_sequential.md) | Offline vs Sequential（已删 sequential） |
+| [docs/exp_holdout_vs_full.md](docs/exp_holdout_vs_full.md) | Holdout vs Full（已删 hold-out 协议） |
 
-本地实验产物在 `experiments/`（默认不推远程）。
+本地实验产物在 `experiments/`（默认不推远程）；各子目录有 `NOTES.md` 说明删改依据。
 
 ---
 
@@ -47,7 +48,7 @@ bash scripts/eval.sh  configs/default.yaml
 ```
 
 等价于直接调用 `main_quant.py` / `main_eval.py`。  
-关键项：`asd_theta1` / `asd_theta2`、`target_bit` 或 `asd_high_precision_ratio`、`w_group`、`pseudo_quant: true`、`quant_mode: offline|sequential`。
+关键项：`target_bit` 或 `asd_high_precision_ratio`、`w_group`、可选 `split_modality` + `modality_theta`。
 
 ---
 

@@ -1,24 +1,27 @@
 """
-Streaming Hessian diagonal collection for ASD importance ranking.
+Streaming second-order energy collection for ASD importance ranking.
 
 Uses MBQ-style Catcher + layer-by-layer forward to avoid CUDA OOM:
   1. Catcher intercepts the first transformer block's input (hidden_states + kwargs).
-  2. Each block is moved to GPU one at a time; hooks accumulate diag(H) on CPU.
+  2. Each block is moved to GPU one at a time; hooks accumulate E[x_c^2] on CPU.
   3. After processing, the block returns to CPU before the next one loads.
 
-Memory cost: O(mini_batches * seq * hidden) for cached hidden states on CPU,
-plus one transformer block on GPU at a time.
+Optional modality split (vision vs text tokens) uses metadata ``vision_mask``
+together with ``attention_mask`` so padding is excluded from both buckets.
 """
 from __future__ import annotations
 
 import gc
 import time
+from typing import Any
 
 import torch
 import torch.nn as nn
 from tqdm import tqdm
 
 from prism.quantization.quantize import get_blocks, get_named_linears, _linear_layer_key
+
+_EPS = 1e-8
 
 
 def move_embed(model: nn.Module, device: str) -> None:
@@ -36,13 +39,63 @@ def move_embed(model: nn.Module, device: str) -> None:
         model.model.embed_tokens = model.model.embed_tokens.to(device)
     elif "InternVL" in cls_name and hasattr(model, "language_model"):
         lm = model.language_model
-        inner = getattr(lm, "model", lm) 
+        inner = getattr(lm, "model", lm)
         if hasattr(inner, "tok_embeddings"):
             inner.tok_embeddings = inner.tok_embeddings.to(device)
         elif hasattr(inner, "embed_tokens"):
             inner.embed_tokens = inner.embed_tokens.to(device)
     else:
         pass
+
+
+def _to_bs_bool_mask(
+    mask: torch.Tensor | None,
+    batch_size: int,
+    seq_len: int,
+    device: torch.device,
+) -> torch.Tensor:
+    """Convert attention / vision masks to shape (B, S) bool."""
+    if mask is None:
+        return torch.ones(batch_size, seq_len, dtype=torch.bool, device=device)
+
+    m = mask.detach().to(device)
+    if m.dim() == 1:
+        if m.numel() == seq_len:
+            m = m.unsqueeze(0).expand(batch_size, -1)
+        elif m.numel() == batch_size * seq_len:
+            m = m.view(batch_size, seq_len)
+        else:
+            return torch.ones(batch_size, seq_len, dtype=torch.bool, device=device)
+    elif m.dim() == 2:
+        if m.shape[0] != batch_size or m.shape[1] < seq_len:
+            if m.numel() == batch_size * seq_len:
+                m = m.view(batch_size, seq_len)
+            else:
+                return torch.ones(batch_size, seq_len, dtype=torch.bool, device=device)
+        m = m[:, :seq_len]
+    elif m.dim() == 3:
+        # (B, 1, S) or (B, S, S)
+        if m.shape[-1] >= seq_len and m.shape[1] == 1:
+            m = m[:, 0, :seq_len]
+        elif m.shape[1] >= seq_len and m.shape[2] >= seq_len:
+            m = m[:, :seq_len, :seq_len].diagonal(dim1=1, dim2=2)
+        else:
+            return torch.ones(batch_size, seq_len, dtype=torch.bool, device=device)
+    elif m.dim() == 4:
+        # (B, heads, Q, K) additive / bool mask — use last query over keys
+        key = m[:, 0, -1, :seq_len]
+        if key.dtype == torch.bool:
+            m = key
+        else:
+            m = key > -1e3
+    else:
+        return torch.ones(batch_size, seq_len, dtype=torch.bool, device=device)
+
+    if m.dtype != torch.bool:
+        m = m != 0
+    if m.shape != (batch_size, seq_len):
+        return torch.ones(batch_size, seq_len, dtype=torch.bool, device=device)
+    return m
 
 
 def capture_first_block_inputs(
@@ -127,27 +180,84 @@ def capture_first_block_inputs(
     return all_inps, all_layer_kwargs
 
 
+def _prepare_layer_kwargs(raw: dict) -> dict:
+    kw: dict[str, Any] = {}
+    for k, v in raw.items():
+        if k in ("past_key_value", "past_key_values"):
+            continue
+        if isinstance(v, torch.Tensor):
+            kw[k] = v.detach().to("cuda", copy=True)
+        elif isinstance(v, tuple) and v and all(isinstance(x, torch.Tensor) for x in v):
+            kw[k] = tuple(x.detach().to("cuda", copy=True) for x in v)
+        else:
+            kw[k] = v
+    kw["use_cache"] = False
+    kw["past_key_value"] = None
+    return kw
+
+
+def _accumulate(
+    store_sum: dict[str, torch.Tensor],
+    store_count: dict[str, int],
+    key: str,
+    x2: torch.Tensor,
+    n: int,
+) -> None:
+    if n <= 0:
+        return
+    x2 = x2.detach().float().cpu()
+    if key not in store_sum:
+        store_sum[key] = x2
+        store_count[key] = n
+    else:
+        store_sum[key] += x2
+        store_count[key] += n
+
+
+def _finalize(store_sum: dict[str, torch.Tensor], store_count: dict[str, int]) -> dict[str, torch.Tensor]:
+    out: dict[str, torch.Tensor] = {}
+    for key, s in store_sum.items():
+        n = max(int(store_count.get(key, 0)), 1)
+        out[key] = s / n
+    return out
+
+
 @torch.no_grad()
 def collect_hessian_diag(
     model_wrapper,
     forward_kwargs_list: list[dict],
-) -> dict[str, torch.Tensor]:
-    """Collect Hessian diagonal for every Linear layer via layer-by-layer forward.
+    metadata_list: list[dict] | None = None,
+    split_modality: bool = False,
+) -> dict[str, torch.Tensor] | dict[str, dict[str, torch.Tensor]]:
+    """Collect per-column second-order energy E[x_c^2] for every Linear layer.
 
-    Follows the MBQ ``run_mbq`` pattern (Catcher -> layer-by-layer -> CPU offload)
-    to keep GPU memory bounded to a single transformer block at a time.
+    This is an OWQ-style diagonal activation energy, not a full GPTQ Hessian.
 
     Args:
-        model_wrapper: process_model object with ``.model``, ``.forward()``,
-            ``.to_cuda()`` and ``.to_cpu()`` methods (same role as MBQ's
-            ``model`` argument in ``run_mbq``).
-        forward_kwargs_list: list of mini-batch dicts, each containing keys
-            accepted by ``model_wrapper.forward()`` (e.g. inputs_embeds,
-            labels, attention_mask).  Tensors should reside on CPU.
+        model_wrapper: process_model with ``.model``, ``.forward()``,
+            ``.to_cuda()`` and ``.to_cpu()``.
+        forward_kwargs_list: mini-batch dicts for ``model_wrapper.forward()``.
+        metadata_list: optional per-batch metadata; must contain ``vision_mask``
+            when ``split_modality=True``.
+        split_modality: if True, also accumulate vision/text energies using
+            ``vision_mask`` and ``attention_mask``.
 
     Returns:
-        ``{layer_key: diag_H}`` where ``diag_H`` is shape ``[C] = E[x_c^2]``.
+        If ``split_modality`` is False:
+            ``{layer_key: E[x_c^2]}``
+        If True:
+            ``{"mixed": {...}, "vision": {...}, "text": {...}}``
     """
+    if split_modality:
+        if metadata_list is None or len(metadata_list) != len(forward_kwargs_list):
+            raise ValueError(
+                "split_modality=True requires metadata_list aligned with "
+                "forward_kwargs_list (need vision_mask)."
+            )
+        for i, meta in enumerate(metadata_list):
+            if "vision_mask" not in meta:
+                raise ValueError(f"metadata_list[{i}] missing vision_mask")
+
     model = model_wrapper.model
     layers = get_blocks(model)
 
@@ -155,28 +265,64 @@ def collect_hessian_diag(
         model_wrapper, forward_kwargs_list,
     )
 
-    sum_x2: dict[str, torch.Tensor] = {}
-    count: dict[str, int] = {}
+    sum_mixed: dict[str, torch.Tensor] = {}
+    count_mixed: dict[str, int] = {}
+    sum_vision: dict[str, torch.Tensor] = {}
+    count_vision: dict[str, int] = {}
+    sum_text: dict[str, torch.Tensor] = {}
+    count_text: dict[str, int] = {}
+
+    # Filled per mini-batch before layer forward; read by hooks.
+    batch_ctx: dict[str, torch.Tensor | None] = {
+        "attn_mask": None,
+        "vision_mask": None,
+    }
 
     def _make_hook(key: str):
         def hook(_module, args, _result):
             x = args[0]
-            if not isinstance(x, torch.Tensor):
+            if not isinstance(x, torch.Tensor) or x.numel() == 0:
                 return
-            x = x.detach().float().view(-1, x.shape[-1])  # (tokens, C)
-            if x.numel() == 0:
+            if x.dim() == 2:
+                # (tokens, C) — no reliable modality split
+                x2 = x.detach().float().pow(2).sum(dim=0)
+                _accumulate(sum_mixed, count_mixed, key, x2, x.shape[0])
                 return
-            x2 = x.pow(2).sum(dim=0).cpu()  # (C,) -> CPU immediately
-            n = x.shape[0]
-            if key not in sum_x2:
-                sum_x2[key] = x2
-                count[key] = n
-            else:
-                sum_x2[key] += x2
-                count[key] += n
+
+            if x.dim() != 3:
+                x_flat = x.detach().float().view(-1, x.shape[-1])
+                x2 = x_flat.pow(2).sum(dim=0)
+                _accumulate(sum_mixed, count_mixed, key, x2, x_flat.shape[0])
+                return
+
+            bsz, seq_len, _ = x.shape
+            x_f = x.detach().float()
+            device = x_f.device
+            attn = _to_bs_bool_mask(batch_ctx["attn_mask"], bsz, seq_len, device)
+            valid = attn.reshape(-1)
+            x_flat = x_f.reshape(-1, x_f.shape[-1])
+            if valid.any():
+                x2 = (x_flat[valid].pow(2)).sum(dim=0)
+                _accumulate(sum_mixed, count_mixed, key, x2, int(valid.sum().item()))
+
+            if not split_modality:
+                return
+
+            vision = _to_bs_bool_mask(batch_ctx["vision_mask"], bsz, seq_len, device)
+            vision_flat = vision.reshape(-1)
+            v_sel = valid & vision_flat
+            t_sel = valid & (~vision_flat)
+            if v_sel.any():
+                x2_v = x_flat[v_sel].pow(2).sum(dim=0)
+                _accumulate(sum_vision, count_vision, key, x2_v, int(v_sel.sum().item()))
+            if t_sel.any():
+                x2_t = x_flat[t_sel].pow(2).sum(dim=0)
+                _accumulate(sum_text, count_text, key, x2_t, int(t_sel.sum().item()))
+
         return hook
 
-    for layer_idx in tqdm(range(len(layers)), desc="[PRISM] Collecting Hessian diag..."):
+    desc = "[PRISM] Collecting modality energy..." if split_modality else "[PRISM] Collecting Hessian diag..."
+    for layer_idx in tqdm(range(len(layers)), desc=desc):
         layer = layers[layer_idx].cuda()
 
         handles = []
@@ -187,31 +333,50 @@ def collect_hessian_diag(
         new_inps = []
         for batch_idx in range(len(all_inps)):
             inp = all_inps[batch_idx].cuda()
-            kw = {}
-            for k, v in all_layer_kwargs[batch_idx].items():
-                if k in ("past_key_value", "past_key_values"):
-                    continue
-                if isinstance(v, torch.Tensor):
-                    kw[k] = v.detach().to("cuda", copy=True)
-                elif isinstance(v, tuple) and v and all(isinstance(x, torch.Tensor) for x in v):
-                    kw[k] = tuple(x.detach().to("cuda", copy=True) for x in v)
-                else:
-                    kw[k] = v
-            kw["use_cache"] = False
-            kw["past_key_value"] = None
+            kw = _prepare_layer_kwargs(all_layer_kwargs[batch_idx])
+            batch_ctx["attn_mask"] = kw.get("attention_mask")
+            if split_modality:
+                vm = metadata_list[batch_idx]["vision_mask"]
+                batch_ctx["vision_mask"] = (
+                    vm.cuda() if isinstance(vm, torch.Tensor) else vm
+                )
+            else:
+                batch_ctx["vision_mask"] = None
+
             out = layer(inp, **kw)[0]
             new_inps.append(out.detach().cpu())
             del inp, out, kw
+            batch_ctx["attn_mask"] = None
+            batch_ctx["vision_mask"] = None
             torch.cuda.empty_cache()
 
         for h in handles:
             h.remove()
 
         all_inps = new_inps
-
         layers[layer_idx] = layer.cpu()
         del layer
         gc.collect()
         torch.cuda.empty_cache()
 
-    return {key: sum_x2[key] / count[key] for key in sum_x2}
+    mixed = _finalize(sum_mixed, count_mixed)
+    if not split_modality:
+        return mixed
+
+    vision = _finalize(sum_vision, count_vision)
+    text = _finalize(sum_text, count_text)
+    # Layers that never saw a modality fall back to mixed energy.
+    for key in mixed:
+        if key not in vision:
+            vision[key] = mixed[key].clone()
+        if key not in text:
+            text[key] = mixed[key].clone()
+
+    n_v = sum(count_vision.values())
+    n_t = sum(count_text.values())
+    print(
+        f"[PRISM] Modality energy tokens: vision={n_v}, text={n_t}, "
+        f"layers_mixed={len(mixed)}",
+        flush=True,
+    )
+    return {"mixed": mixed, "vision": vision, "text": text}
