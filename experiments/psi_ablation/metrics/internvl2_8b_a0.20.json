@@ -1,0 +1,14 @@
+{
+  "timestamp": "2026-09-14T15:53:27",
+  "model": "internvl2",
+  "model_args": "pretrained=OpenGVLab/InternVL2-8B",
+  "alpha": 0.2,
+  "theta1": 0.8,
+  "theta2": 0.2,
+  "ratio": 0.01,
+  "ce_fp": 1.4378679473419003,
+  "ce_q": 1.443600474934373,
+  "delta_ce": 0.005732527592472669,
+  "n_kept": 9830,
+  "scale_path": "experiments/psi_ablation/scale_cache/internvl2_8b_a0.20.pt"
+}

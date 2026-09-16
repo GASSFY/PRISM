@@ -1,0 +1,16 @@
+{
+  "timestamp": "2026-09-15T17:02:43",
+  "model": "llava_onevision",
+  "model_args": "pretrained=lmms-lab/llava-onevision-qwen2-7b-ov",
+  "modality_theta": 0.0,
+  "formula": "K = \u03b8\u00b7norm(K^T) + (1-\u03b8)\u00b7norm(K^V)",
+  "normalization": "per-modality global max on importance before fusion",
+  "asd_theta1": 1.0,
+  "asd_theta2": 0.0,
+  "ratio": 0.01,
+  "ce_fp": 0.8780630999073128,
+  "ce_q": 0.9037799956733298,
+  "delta_ce": 0.02571689576601699,
+  "n_kept": 11325,
+  "scale_path": "experiments/modality_theta/scale_cache/llava_ov_t0.00.pt"
+}

@@ -1,0 +1,72 @@
+{
+  "llava_ov": {
+    "model_tag": "llava_ov",
+    "strategy": "shared_quota",
+    "delta_ce": 0.022089883249713727,
+    "n_kept": 11325,
+    "composition": {
+      "rho": 1.0,
+      "n_total": 1132544,
+      "n_keep": 11325,
+      "list_size": 11325,
+      "n_shared_pool": 6738,
+      "n_only_v_pool": 4587,
+      "n_only_t_pool": 4587,
+      "n_shared_kept": 6738,
+      "n_only_v_kept": 2293,
+      "n_only_t_kept": 2294,
+      "n_fallback_kept": 0
+    },
+    "timing": {
+      "seconds_load_model": 9.68514678068459,
+      "seconds_load_calib": 3.8081350065767765,
+      "seconds_energy": 0.02772165648639202,
+      "energy_from_cache": true,
+      "seconds_fp_ce": 12.876649284735322,
+      "seconds_select": 10.24923056922853,
+      "seconds_pseudo_quant": 2.5278596002608538,
+      "seconds_ce_q": 12.896402843296528,
+      "seconds_save_ckpt": 19.144046124070883,
+      "seconds_build_wall": 117,
+      "seconds_eval_realworldqa": 797,
+      "seconds_eval_mmmu_val": 425,
+      "seconds_total": 1339
+    },
+    "checkpoint": "experiments/column_keep_strategies/strategy3_shared/scale_cache/llava_ov.pt"
+  },
+  "internvl2_8b": {
+    "model_tag": "internvl2_8b",
+    "strategy": "shared_quota",
+    "delta_ce": 0.004206635150335591,
+    "n_kept": 9830,
+    "composition": {
+      "rho": 1.0,
+      "n_total": 983040,
+      "n_keep": 9830,
+      "list_size": 9830,
+      "n_shared_pool": 5946,
+      "n_only_v_pool": 3884,
+      "n_only_t_pool": 3884,
+      "n_shared_kept": 5946,
+      "n_only_v_kept": 1942,
+      "n_only_t_kept": 1942,
+      "n_fallback_kept": 0
+    },
+    "timing": {
+      "seconds_load_model": 9.921677231788635,
+      "seconds_load_calib": 3.4331432078033686,
+      "seconds_energy": 0.023719439283013344,
+      "energy_from_cache": true,
+      "seconds_fp_ce": 10.33072965964675,
+      "seconds_select": 10.50466189533472,
+      "seconds_pseudo_quant": 2.3159820586442947,
+      "seconds_ce_q": 10.265811631456017,
+      "seconds_save_ckpt": 19.362481214106083,
+      "seconds_build_wall": 111,
+      "seconds_eval_realworldqa": 415,
+      "seconds_eval_mmmu_val": 283,
+      "seconds_total": 809
+    },
+    "checkpoint": "experiments/column_keep_strategies/strategy3_shared/scale_cache/internvl2_8b.pt"
+  }
+}

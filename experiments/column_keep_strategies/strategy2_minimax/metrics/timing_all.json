@@ -1,0 +1,46 @@
+{
+  "llava_ov": {
+    "model_tag": "llava_ov",
+    "strategy": "worst_modality_greedy",
+    "delta_ce": 0.02571689576601699,
+    "n_kept": 11325,
+    "timing": {
+      "seconds_load_model": 10.78721733018756,
+      "seconds_load_calib": 3.998775703832507,
+      "seconds_energy": 0.026597166433930397,
+      "energy_from_cache": true,
+      "seconds_fp_ce": 12.977958535775542,
+      "seconds_select": 12.309249455109239,
+      "seconds_pseudo_quant": 2.517062997445464,
+      "seconds_ce_q": 12.879315769299865,
+      "seconds_save_ckpt": 17.09411341138184,
+      "seconds_build_wall": 116,
+      "seconds_eval_realworldqa": 794,
+      "seconds_eval_mmmu_val": 421,
+      "seconds_total": 1331
+    },
+    "checkpoint": "experiments/column_keep_strategies/strategy2_minimax/scale_cache/llava_ov.pt"
+  },
+  "internvl2_8b": {
+    "model_tag": "internvl2_8b",
+    "strategy": "worst_modality_greedy",
+    "delta_ce": -0.00019573377897086353,
+    "n_kept": 9830,
+    "timing": {
+      "seconds_load_model": 11.767680712044239,
+      "seconds_load_calib": 3.741891937330365,
+      "seconds_energy": 0.02581605687737465,
+      "energy_from_cache": true,
+      "seconds_fp_ce": 10.737789560109377,
+      "seconds_select": 16.154413333162665,
+      "seconds_pseudo_quant": 2.3703996520489454,
+      "seconds_ce_q": 10.421934843063354,
+      "seconds_save_ckpt": 17.22775525227189,
+      "seconds_build_wall": 124,
+      "seconds_eval_realworldqa": 323,
+      "seconds_eval_mmmu_val": 282,
+      "seconds_total": 729
+    },
+    "checkpoint": "experiments/column_keep_strategies/strategy2_minimax/scale_cache/internvl2_8b.pt"
+  }
+}

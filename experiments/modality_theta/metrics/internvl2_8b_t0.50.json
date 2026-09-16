@@ -1,0 +1,16 @@
+{
+  "timestamp": "2026-09-15T18:21:39",
+  "model": "internvl2",
+  "model_args": "pretrained=OpenGVLab/InternVL2-8B",
+  "modality_theta": 0.5,
+  "formula": "K = \u03b8\u00b7norm(K^T) + (1-\u03b8)\u00b7norm(K^V)",
+  "normalization": "per-modality global max on importance before fusion",
+  "asd_theta1": 1.0,
+  "asd_theta2": 0.0,
+  "ratio": 0.01,
+  "ce_fp": 1.4378679473419003,
+  "ce_q": 1.4426674657920326,
+  "delta_ce": 0.004799518450132378,
+  "n_kept": 9830,
+  "scale_path": "experiments/modality_theta/scale_cache/internvl2_8b_t0.50.pt"
+}

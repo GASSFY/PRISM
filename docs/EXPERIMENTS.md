@@ -7,7 +7,8 @@
 | Offline vs Sequential | [exp_offline_vs_sequential.md](exp_offline_vs_sequential.md) | `experiments/offline_vs_sequential/` | 否（证据：删 sequential） |
 | Holdout vs Full | [exp_holdout_vs_full.md](exp_holdout_vs_full.md) | `experiments/holdout_vs_full/` | 否（证据：删 hold-out 协议） |
 | Ψ ablation | [exp_psi_ablation.md](exp_psi_ablation.md) | `experiments/psi_ablation/` | 否（证据：删 Ψ） |
-| 跨模态融合 θ∈{0,0.5,1} | [exp_modality_fusion_ablation.md](exp_modality_fusion_ablation.md) | `experiments/modality_theta/` | 阶段 1 探索中 |
+| 跨模态融合 θ∈{0,0.5,1} | [exp_modality_fusion_ablation.md](exp_modality_fusion_ablation.md) | `experiments/modality_theta/` | 阶段 1 固定网格探索 |
+| **列选择策略对比（主对照）** | [exp_column_keep_strategies.md](exp_column_keep_strategies.md) | `experiments/column_keep_strategies/` | **是（核心）** |
 
 每个本地产物目录有 `NOTES.md`，说明「证明了什么 → 因此删了什么」。
 

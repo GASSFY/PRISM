@@ -1,0 +1,29 @@
+{
+  "timestamp": "2026-09-12T12:21:00",
+  "ratio": 0.01,
+  "n_train": 96,
+  "n_holdout": 32,
+  "A_best": {
+    "alpha": 0.3,
+    "theta1": 0.7,
+    "theta2": 0.3,
+    "ce_q": 0.8974480446327595,
+    "ce_fp": 0.8780630999073128,
+    "delta_ce": 0.019384944725446718,
+    "n_kept": 11325,
+    "seconds": 31.10898207500577
+  },
+  "B_best": {
+    "alpha": 1.0,
+    "theta1": 0.0,
+    "theta2": 1.0,
+    "ce_q": 0.893333,
+    "ce_fp": 0.875778,
+    "delta_ce": 0.017556,
+    "n_kept": 11325,
+    "seconds": 22.9
+  },
+  "checkpoint_A": "compare_rwqa/holdout_vs_full/scale_cache/prism_alphaA.pt",
+  "checkpoint_B": "compare_rwqa/holdout_vs_full/scale_cache/prism_alphaB.pt",
+  "note": "A checkpoint from full search; B rebuilt via --save_only after disk-full on first save"
+}

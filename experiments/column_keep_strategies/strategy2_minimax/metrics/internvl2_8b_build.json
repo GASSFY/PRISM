@@ -1,0 +1,26 @@
+{
+  "timestamp": "2026-09-15T21:26:27",
+  "strategy": "worst_modality_greedy",
+  "model": "internvl2",
+  "model_args": "pretrained=OpenGVLab/InternVL2-8B",
+  "searchable_params": null,
+  "formula": "greedy: m*=argmax(G^m-C^m), c*=argmax g^{m*} (tie-break other)",
+  "normalization": "per-modality global max on importance",
+  "ratio": 0.01,
+  "ce_fp": 1.4378679473419003,
+  "ce_q": 1.4376722135629294,
+  "delta_ce": -0.00019573377897086353,
+  "n_kept": 9830,
+  "scale_path": "experiments/column_keep_strategies/strategy2_minimax/scale_cache/internvl2_8b.pt",
+  "timing": {
+    "seconds_load_model": 11.767680712044239,
+    "seconds_load_calib": 3.741891937330365,
+    "seconds_energy": 0.02581605687737465,
+    "energy_from_cache": true,
+    "seconds_fp_ce": 10.737789560109377,
+    "seconds_select": 16.154413333162665,
+    "seconds_pseudo_quant": 2.3703996520489454,
+    "seconds_ce_q": 10.421934843063354,
+    "seconds_save_ckpt": 17.22775525227189
+  }
+}

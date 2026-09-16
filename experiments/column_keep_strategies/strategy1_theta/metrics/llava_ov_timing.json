@@ -1,0 +1,93 @@
+{
+  "model_tag": "llava_ov",
+  "theta_star": 1.0,
+  "delta_ce_star": 0.02189164517714537,
+  "n_kept": 11325,
+  "coarse_best": {
+    "modality_theta": 1.0,
+    "delta_ce": 0.02189164517714537
+  },
+  "trials": [
+    {
+      "modality_theta": 0.0,
+      "ce_q": 0.9037799956733298,
+      "ce_fp": 0.8780630999073128,
+      "delta_ce": 0.02571689576601699,
+      "n_kept": 11325,
+      "seconds": 48.74799397960305
+    },
+    {
+      "modality_theta": 0.25,
+      "ce_q": 0.903787112809527,
+      "ce_fp": 0.8780630999073128,
+      "delta_ce": 0.025724012902214155,
+      "n_kept": 11325,
+      "seconds": 41.46367787756026
+    },
+    {
+      "modality_theta": 0.5,
+      "ce_q": 0.903050304254503,
+      "ce_fp": 0.8780630999073128,
+      "delta_ce": 0.02498720434719015,
+      "n_kept": 11325,
+      "seconds": 38.70611056126654
+    },
+    {
+      "modality_theta": 0.75,
+      "ce_q": 0.9012892327576577,
+      "ce_fp": 0.8780630999073128,
+      "delta_ce": 0.023226132850344916,
+      "n_kept": 11325,
+      "seconds": 37.666007643565536
+    },
+    {
+      "modality_theta": 1.0,
+      "ce_q": 0.8999547450844582,
+      "ce_fp": 0.8780630999073128,
+      "delta_ce": 0.02189164517714537,
+      "n_kept": 11325,
+      "seconds": 41.78640950657427
+    },
+    {
+      "modality_theta": 0.9,
+      "ce_q": 0.901835359274529,
+      "ce_fp": 0.8780630999073128,
+      "delta_ce": 0.023772259367216164,
+      "n_kept": 11325,
+      "seconds": 41.04609542712569
+    },
+    {
+      "modality_theta": 0.8,
+      "ce_q": 0.9028367643848665,
+      "ce_fp": 0.8780630999073128,
+      "delta_ce": 0.024773664477553692,
+      "n_kept": 11325,
+      "seconds": 40.09481134079397
+    },
+    {
+      "modality_theta": 0.7,
+      "ce_q": 0.9015123433111604,
+      "ce_fp": 0.8780630999073128,
+      "delta_ce": 0.023449243403847575,
+      "n_kept": 11325,
+      "seconds": 40.13974587060511
+    }
+  ],
+  "timing": {
+    "seconds_load_model": 11.30393636226654,
+    "seconds_load_calib": 3.8658045176416636,
+    "seconds_energy": 0.05058368481695652,
+    "energy_from_cache": true,
+    "seconds_search_wall": 415.4578428696841,
+    "seconds_fp_ce": 15.940024964511395,
+    "seconds_search_trials": 329.65085220709443,
+    "seconds_final_ckpt": 30.95908410102129,
+    "n_trials": 8,
+    "seconds_save_ckpt": 18.51823428273201,
+    "seconds_search_pipeline_wall": 476,
+    "seconds_eval_realworldqa": 793,
+    "seconds_eval_mmmu_val": 420,
+    "seconds_total": 1689
+  },
+  "checkpoint": "experiments/column_keep_strategies/strategy1_theta/scale_cache/llava_ov_best.pt"
+}
