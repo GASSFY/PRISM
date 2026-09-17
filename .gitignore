@@ -44,6 +44,9 @@ configs/*
 # Local experiment workspace (logs, checkpoints, ad-hoc scripts)
 experiments/
 
+# Experiment write-ups stay local until publication
+docs/
+
 # Legacy / local caches
 *.log
 scale_cache/
