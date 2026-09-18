@@ -2,7 +2,9 @@
 PRISM Phase-1: K-based column selection + mixed-precision *pseudo* quantization.
 
 Offline only: FP calibrate once → global K ranking → one-shot pseudo-quant.
-Optional cross-modal fusion: K = θ·norm(K^T) + (1-θ)·norm(K^V).
+Optional cross-modal fusion:
+  linear:    K = θ·norm(K^T) + (1-θ)·norm(K^V)
+  geometric: log K = θ·log K^T + (1-θ)·log K^V
 """
 import argparse
 import os
@@ -81,7 +83,14 @@ def parse_args() -> argparse.Namespace:
         "--modality_theta",
         type=float,
         default=None,
-        help="Fusion weight on TEXT: K = θ·K^T + (1-θ)·K^V. Requires --split_modality.",
+        help="Fusion weight on TEXT. Requires --split_modality.",
+    )
+    parser.add_argument(
+        "--fusion_mode",
+        type=str,
+        default="linear",
+        choices=["linear", "geometric"],
+        help="Cross-modal fusion: linear (max-norm soft-OR) or geometric (log soft-AND).",
     )
     args = parser.parse_args()
     return args
@@ -140,6 +149,7 @@ def _run_offline(
     if getattr(args, "asd_mixed_precision", True) and forward_kwargs_list is not None:
         split_modality = bool(getattr(args, "split_modality", False))
         modality_theta = getattr(args, "modality_theta", None)
+        fusion_mode = str(getattr(args, "fusion_mode", "linear") or "linear")
         if modality_theta is not None and not split_modality:
             raise ValueError("modality_theta requires --split_modality")
 
@@ -169,10 +179,15 @@ def _run_offline(
                 hessian_vision=energy["vision"],
                 hessian_text=energy["text"],
                 modality_theta=float(modality_theta),
+                fusion_mode=fusion_mode,  # type: ignore[arg-type]
             )
+            if fusion_mode == "geometric":
+                formula = "logK = θ·logK^T + (1-θ)·logK^V"
+            else:
+                formula = "K = θ·norm(K^T) + (1-θ)·norm(K^V)"
             print(
-                f"[PRISM] Modality fusion: θ={float(modality_theta):.3f} "
-                f"(K = θ·K^T + (1-θ)·K^V)"
+                f"[PRISM] Modality fusion ({fusion_mode}): "
+                f"θ={float(modality_theta):.3f} ({formula})"
             )
         else:
             assert isinstance(energy, dict)

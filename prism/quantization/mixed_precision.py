@@ -6,21 +6,18 @@ Flow (mixed / default):
   2. Global normalize K = importance / global_max  →  [0, 1]
   3. Global sort, take top ratio as high_precision_columns
 
-Flow (modality fusion):
+Flow (modality fusion, linear — soft-OR):
   1. K^V_c = ||W[:, c]||^2 * E[x_c^2 | vision]
   2. K^T_c = ||W[:, c]||^2 * E[x_c^2 | text]
-  3. Globally normalize each modality, then
+  3. Globally max-normalize each modality, then
        K = modality_theta * K^T_norm + (1 - modality_theta) * K^V_norm
      so modality_theta=1 is text-only, modality_theta=0 is vision-only.
   4. Global sort on fused K.
 
-Flow (worst-modality greedy / strategy A):
-  Same K^V / K^T, then greedily keep columns that always rescue the
-  modality with larger remaining uncovered gain. No fusion weight.
-
-Flow (shared→only quota / strategy B):
-  Top-ρB per modality → Shared / OnlyV / OnlyT → fill Shared first,
-  then split remaining budget evenly between OnlyV and OnlyT.
+Flow (modality fusion, geometric — soft-AND):
+  Same K^V / K^T, score in log domain (scale-invariant; no cross-modal norm):
+       log K = modality_theta * log K^T + (1 - modality_theta) * log K^V
+  Ranking uses log K directly. θ=1 text-only, θ=0 vision-only.
 
 Budget: prefer ``target_bit`` (average bit-width). Kept columns count as
 ``high_bit`` (default 16, FP16), others as ``low_bit`` (e.g. 4):
@@ -30,12 +27,16 @@ Budget: prefer ``target_bit`` (average bit-width). Kept columns count as
 """
 from __future__ import annotations
 
+from typing import Literal
+
 import torch
 import torch.nn as nn
 
 from prism.metrics.asd import compute_importance
 
 _EPS = 1e-8
+
+FusionMode = Literal["linear", "geometric"]
 
 
 def ratio_from_target_bit(
@@ -102,6 +103,7 @@ def compute_global_asd_list(
     hessian_vision: dict[str, torch.Tensor] | None = None,
     hessian_text: dict[str, torch.Tensor] | None = None,
     modality_theta: float | None = None,
+    fusion_mode: FusionMode = "linear",
 ) -> list[tuple[str, int, float]]:
     """
     Compute per-channel keep scores across all layers (name kept for compatibility).
@@ -110,7 +112,10 @@ def compute_global_asd_list(
 
     Modality fusion path:
         pass ``hessian_vision``, ``hessian_text``, and ``modality_theta``.
-        Score uses K = θ·K^T_norm + (1-θ)·K^V_norm.
+        ``fusion_mode="linear"`` (default):
+            K = θ·K^T_norm + (1-θ)·K^V_norm  (per-modality global max norm).
+        ``fusion_mode="geometric"``:
+            log K = θ·log K^T + (1-θ)·log K^V  (no cross-modal normalization).
 
     Returns:
         [(layer_key, channel_idx, score), ...], unsorted.
@@ -123,6 +128,11 @@ def compute_global_asd_list(
         theta = float(modality_theta)
         if not (0.0 <= theta <= 1.0):
             raise ValueError(f"modality_theta must be in [0, 1], got {theta}")
+        mode = str(fusion_mode).lower().strip()
+        if mode not in ("linear", "geometric"):
+            raise ValueError(
+                f"fusion_mode must be 'linear' or 'geometric', got {fusion_mode!r}"
+            )
 
         imp_v = _layer_importance_from_energy(model, hessian_vision)
         imp_t = _layer_importance_from_energy(model, hessian_text)
@@ -130,18 +140,23 @@ def compute_global_asd_list(
         if not keys:
             return []
 
-        max_v = max(imp_v[k].max().item() for k in keys)
-        max_t = max(imp_t[k].max().item() for k in keys)
-        max_v = max(max_v, _EPS)
-        max_t = max(max_t, _EPS)
-
         fused: dict[str, torch.Tensor] = {}
-        for key in keys:
-            kv = imp_v[key] / max_v
-            kt = imp_t[key] / max_t
-            fused[key] = theta * kt + (1.0 - theta) * kv
+        if mode == "geometric":
+            # Scale-invariant soft-AND; ranking uses log-domain scores.
+            for key in keys:
+                log_kv = torch.log(imp_v[key].float().clamp(min=_EPS))
+                log_kt = torch.log(imp_t[key].float().clamp(min=_EPS))
+                fused[key] = theta * log_kt + (1.0 - theta) * log_kv
+        else:
+            max_v = max(imp_v[k].max().item() for k in keys)
+            max_t = max(imp_t[k].max().item() for k in keys)
+            max_v = max(max_v, _EPS)
+            max_t = max(max_t, _EPS)
+            for key in keys:
+                kv = imp_v[key] / max_v
+                kt = imp_t[key] / max_t
+                fused[key] = theta * kt + (1.0 - theta) * kv
 
-        # Already ~[0, 1] per modality; emit fused scores directly.
         result: list[tuple[str, int, float]] = []
         for key, score in fused.items():
             for c in range(score.shape[0]):

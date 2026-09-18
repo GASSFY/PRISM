@@ -7,7 +7,8 @@ where E[x_c^2] is streaming activation energy (optionally modality-conditioned).
 
 Ranking score is globally normalized K (importance / global_max).
 Optional cross-modal fusion (in mixed_precision):
-  K = modality_theta * K^T_norm + (1 - modality_theta) * K^V_norm
+  linear:    K = θ · K^T_norm + (1-θ) · K^V_norm
+  geometric: log K = θ · log K^T + (1-θ) · log K^V
 
 Ψ / asd_theta1·K+asd_theta2·Ψ was removed after psi_ablation (no gain).
 """
@@ -38,4 +39,6 @@ def importance_kwargs_from_config(config: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     if config.get("modality_theta", None) is not None:
         out["modality_theta"] = float(config["modality_theta"])
+    if config.get("fusion_mode", None) is not None:
+        out["fusion_mode"] = str(config["fusion_mode"])
     return out
