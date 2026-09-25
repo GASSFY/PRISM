@@ -19,11 +19,20 @@ Flow (modality fusion, geometric — soft-AND):
        log K = modality_theta * log K^T + (1 - modality_theta) * log K^V
   Ranking uses log K directly. θ=1 text-only, θ=0 vision-only.
 
-Budget: prefer ``target_bit`` (average bit-width). Kept columns count as
-``high_bit`` (default 16, FP16), others as ``low_bit`` (e.g. 4):
+Flow (modality fusion, rank — scale-free):
+  Replace each modality's values by their global rank in [0, 1], then
+       K = modality_theta * rank(K^T) + (1 - modality_theta) * rank(K^V)
+  The two modalities have very different tail shapes, so max-normalized linear
+  fusion stays vision-dominated until θ is nearly 1. Ranking makes θ=0.5 an
+  actual tie, which is what the θ grid assumes.
+
+Budget: ``target_bit`` is the average bit-width over weight elements.
+Kept columns count as ``high_bit``, others as ``low_bit``:
 
     target_bit = (1 - r) * low_bit + r * high_bit
     r = (target_bit - low_bit) / (high_bit - low_bit)
+
+``r`` is a fraction of parameters, not of columns.
 """
 from __future__ import annotations
 
@@ -36,7 +45,34 @@ from prism.metrics.asd import compute_importance
 
 _EPS = 1e-8
 
-FusionMode = Literal["linear", "geometric"]
+FusionMode = Literal["linear", "geometric", "rank"]
+
+
+def _global_rank_norm(
+    imp: dict[str, torch.Tensor],
+    keys: list[str],
+) -> dict[str, torch.Tensor]:
+    """Map importances to their global rank in [0, 1] (1 = most important).
+
+    Max-normalization leaves the two modalities on incomparable scales: the
+    text-side importance is far more concentrated, so after dividing by its
+    global max most of its mass sits near zero and the flatter vision term
+    dominates the linear sum for all but theta very close to 1. Ranking removes
+    the scale entirely, so theta=0.5 really is an equal vote.
+    """
+    sizes = [int(imp[k].numel()) for k in keys]
+    flat = torch.cat([imp[k].flatten().float() for k in keys])
+    n = flat.numel()
+    order = torch.argsort(flat)
+    ranks = torch.empty(n, dtype=torch.float32)
+    ranks[order] = torch.arange(n, dtype=torch.float32)
+    ranks /= max(n - 1, 1)
+    out: dict[str, torch.Tensor] = {}
+    offset = 0
+    for key, size in zip(keys, sizes):
+        out[key] = ranks[offset : offset + size]
+        offset += size
+    return out
 
 
 def ratio_from_target_bit(
@@ -116,6 +152,8 @@ def compute_global_asd_list(
             K = θ·K^T_norm + (1-θ)·K^V_norm  (per-modality global max norm).
         ``fusion_mode="geometric"``:
             log K = θ·log K^T + (1-θ)·log K^V  (no cross-modal normalization).
+        ``fusion_mode="rank"``:
+            K = θ·rank(K^T) + (1-θ)·rank(K^V)  (scale-free; θ=0.5 is a tie).
 
     Returns:
         [(layer_key, channel_idx, score), ...], unsorted.
@@ -129,9 +167,10 @@ def compute_global_asd_list(
         if not (0.0 <= theta <= 1.0):
             raise ValueError(f"modality_theta must be in [0, 1], got {theta}")
         mode = str(fusion_mode).lower().strip()
-        if mode not in ("linear", "geometric"):
+        if mode not in ("linear", "geometric", "rank"):
             raise ValueError(
-                f"fusion_mode must be 'linear' or 'geometric', got {fusion_mode!r}"
+                "fusion_mode must be 'linear', 'geometric' or 'rank', "
+                f"got {fusion_mode!r}"
             )
 
         imp_v = _layer_importance_from_energy(model, hessian_vision)
@@ -147,6 +186,11 @@ def compute_global_asd_list(
                 log_kv = torch.log(imp_v[key].float().clamp(min=_EPS))
                 log_kt = torch.log(imp_t[key].float().clamp(min=_EPS))
                 fused[key] = theta * log_kt + (1.0 - theta) * log_kv
+        elif mode == "rank":
+            rank_v = _global_rank_norm(imp_v, keys)
+            rank_t = _global_rank_norm(imp_t, keys)
+            for key in keys:
+                fused[key] = theta * rank_t[key] + (1.0 - theta) * rank_v[key]
         else:
             max_v = max(imp_v[k].max().item() for k in keys)
             max_t = max(imp_t[k].max().item() for k in keys)
@@ -191,6 +235,49 @@ def select_high_precision_columns(
     # Non-zero ratio keeps at least one column (avoids rounding to 0 when budget is tiny).
     n_high = max(1, int(round(n_total * ratio)))
     return {(t[0], t[1]) for t in sorted_list[:n_high]}
+
+
+def column_numel(model: nn.Module) -> dict[str, int]:
+    """Parameters in one input-channel column: ``out_features`` of that Linear."""
+    from prism.quantization.quantize import get_blocks, get_named_linears, _linear_layer_key
+
+    costs: dict[str, int] = {}
+    for i, layer in enumerate(get_blocks(model)):
+        for name, linear in get_named_linears(layer).items():
+            costs[_linear_layer_key(i, name)] = int(linear.weight.shape[0])
+    return costs
+
+
+def select_high_precision_by_params(
+    global_asd_list: list[tuple[str, int, float]],
+    ratio: float,
+    numel_per_column: dict[str, int],
+) -> tuple[set[tuple[str, int]], int, int]:
+    """Keep highest-K columns until ``ratio`` of parameters is covered.
+
+    ``ratio`` is a fraction of weight elements, not of columns. A long MLP
+    column therefore spends more of the bit budget than a short attention column.
+    Returns ``(kept, kept_numel, total_numel)``.
+    """
+    if ratio <= 0 or not global_asd_list:
+        return set(), 0, 0
+    if ratio >= 1.0:
+        total = sum(int(numel_per_column[k]) for k, _, _ in global_asd_list)
+        return {(k, c) for k, c, _ in global_asd_list}, total, total
+
+    sorted_list = sorted(global_asd_list, key=lambda t: t[2], reverse=True)
+    total = 0
+    for key, _, _ in sorted_list:
+        total += int(numel_per_column[key])
+    budget = float(ratio) * total
+    selected: set[tuple[str, int]] = set()
+    acc = 0
+    for key, col, _ in sorted_list:
+        if acc >= budget and selected:
+            break
+        selected.add((key, col))
+        acc += int(numel_per_column[key])
+    return selected, acc, total
 
 
 def resolve_high_precision_ratio(

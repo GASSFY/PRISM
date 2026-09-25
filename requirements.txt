@@ -6,7 +6,7 @@ anthropic
 
 # huggingface requirements
 accelerate>=0.21.0
-transformers==4.45.0
+transformers==4.51.3
 datasets
 evaluate
 httpx==0.23.3

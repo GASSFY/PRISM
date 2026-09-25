@@ -24,6 +24,8 @@ def get_blocks(model):
     cls_name = model.__class__.__name__
     if cls_name in ("LlavaLlamaForCausalLM", "LlavaQwenForCausalLM", "LlavaLlamaModel"):
         return model.model.layers
+    if cls_name in ("Qwen2_5_VLForConditionalGeneration", "Qwen2VLForConditionalGeneration"):
+        return model.model.layers
     if "Llama" in cls_name and hasattr(model, "model") and hasattr(model.model, "layers"):
         return model.model.layers
     if "Qwen2" in cls_name and hasattr(model, "model") and hasattr(model.model, "layers"):
@@ -46,6 +48,7 @@ def pseudo_quantize_model_weight(
     zero_point: bool = True,
     high_precision_columns: Set[Tuple[str, int]] | None = None,
     low_w_bit: int = 4,
+    high_w_bit: int = 16,
     progress_label: str = "PRISM",
 ):
     """
@@ -53,9 +56,10 @@ def pseudo_quantize_model_weight(
 
     If high_precision_columns is provided, uses PRISM mixed-precision:
     group = one row x q_group_size columns; outlier columns are excluded when
-    fitting scale/zero (replaced by row mean), then original float values are
-    written back after quantization. The output weight is the merged result of
-    "quantized part + outlier originals", so inference is a plain matmul.
+    fitting the low-bit scale/zero (replaced by row mean). Kept columns are
+    written back as original float when high_w_bit >= 16, or per-column
+    pseudo-quantized to high_w_bit otherwise. The merged result is one float
+    weight, so inference is a plain matmul.
     """
     layers = get_blocks(model)
     q_config = {"zero_point": zero_point, "q_group_size": q_group_size}
@@ -83,6 +87,7 @@ def pseudo_quantize_model_weight(
                     layer_key=key,
                     n_bits=low_w_bit,
                     zero_point=zero_point,
+                    high_bits=high_w_bit,
                 )
             else:
                 m.weight.data = pseudo_quantize_tensor(w, n_bits=w_bit, **q_config)

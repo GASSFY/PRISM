@@ -33,6 +33,8 @@ def move_embed(model: nn.Module, device: str) -> None:
     cls_name = model.__class__.__name__
     if cls_name in ("LlavaQwenForCausalLM", "LlavaLlamaForCausalLM", "LlavaLlamaModel"):
         model.model.embed_tokens = model.model.embed_tokens.to(device)
+    elif cls_name in ("Qwen2_5_VLForConditionalGeneration", "Qwen2VLForConditionalGeneration"):
+        model.model.embed_tokens = model.model.embed_tokens.to(device)
     elif "Qwen2" in cls_name and hasattr(model, "model"):
         model.model.embed_tokens = model.model.embed_tokens.to(device)
     elif "Llama" in cls_name and hasattr(model, "model"):

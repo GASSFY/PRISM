@@ -149,8 +149,9 @@ def _apply_config(args: argparse.Namespace, config: dict) -> None:
 
 def _is_cli_explicit(field: str, argv: list[str]) -> bool:
     """Whether a field is explicitly provided via CLI."""
-    flag = f"--{field.replace('_', '-')}"
-    return flag in argv
+    dashed = f"--{field.replace('_', '-')}"
+    underscored = f"--{field}"
+    return dashed in argv or underscored in argv
 
 
 def _merge_config_with_cli_priority(

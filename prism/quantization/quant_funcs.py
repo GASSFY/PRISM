@@ -146,6 +146,21 @@ def _fill_saved_with_mean(
     return group_filled
 
 
+def _quantize_kept_columns(
+    weight: torch.Tensor,
+    col_mask: torch.Tensor,
+    n_bits: int,
+    zero_point: bool,
+) -> torch.Tensor:
+    """Per-input-channel pseudo-quant of kept columns. ``weight`` is (out, in)."""
+    cols = weight[:, col_mask].transpose(0, 1).contiguous()
+    scale, zero = _get_scale_zero_per_row(cols, n_bits, zero_point)
+    q = _quantize_dequantize_with_scale_zero(cols, scale, zero, n_bits, zero_point)
+    out = weight.clone()
+    out[:, col_mask] = q.transpose(0, 1).to(dtype=weight.dtype)
+    return out
+
+
 @torch.no_grad()
 def pseudo_quantize_weight_prism(
     weight: torch.Tensor,
@@ -154,13 +169,16 @@ def pseudo_quantize_weight_prism(
     layer_key: str,
     n_bits: int = 4,
     zero_point: bool = True,
+    high_bits: int = 16,
 ) -> torch.Tensor:
     """
-    PRISM 混合精度：分组 = 一行×一组列；组内若有保列则剔除后算 scale/zero（用非保列均值填充再 fit），
-    量化后用原权重重写保存位置；返回合并后的权重（推理时等价于 量化部分 + outlier 加回）。
+    PRISM 混合精度：分组 = 一行×一组列；组内若有保列则剔除后算低比特 scale/zero。
+
+    high_bits >= 16：保列写回原始浮点（原有行为）。
+    high_bits < 16：保列按列单独伪量化到该比特，再写回。低比特列的 scale 仍不包含保列。
 
     weight: (out_features, in_features)
-    high_precision_columns: (layer_key, col_idx) 的集合，该列整列视为保存精度（outlier）。
+    high_precision_columns: (layer_key, col_idx) 的集合，该列整列视为高比特。
     """
     out_f, in_f = weight.shape
     result = weight.clone()
@@ -170,6 +188,10 @@ def pseudo_quantize_weight_prism(
     for col_idx in range(in_f):
         if (layer_key, col_idx) in high_precision_columns:
             hp_col_mask[col_idx] = True
+
+    kept_source = w
+    if int(high_bits) < 16 and bool(hp_col_mask.any()):
+        kept_source = _quantize_kept_columns(w, hp_col_mask, int(high_bits), zero_point)
 
     for j in range(0, in_f, q_group_size):
         g = min(q_group_size, in_f - j)
@@ -182,7 +204,8 @@ def pseudo_quantize_weight_prism(
             group, scale, zero, n_bits, zero_point
         )
         saved_f = saved_mask.float()
-        group_merged = group_q * (1 - saved_f) + group * saved_f
+        kept = kept_source[:, j : j + g]
+        group_merged = group_q * (1 - saved_f) + kept * saved_f
         result[:, j : j + g] = group_merged
 
     return result

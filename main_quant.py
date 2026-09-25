@@ -26,7 +26,8 @@ from prism.quantization.checkpoint import load_checkpoint, save_checkpoint
 from prism.quantization.mixed_precision import (
     compute_global_asd_list,
     resolve_high_precision_ratio,
-    select_high_precision_columns,
+    select_high_precision_by_params,
+    column_numel,
 )
 
 
@@ -89,8 +90,11 @@ def parse_args() -> argparse.Namespace:
         "--fusion_mode",
         type=str,
         default="linear",
-        choices=["linear", "geometric"],
-        help="Cross-modal fusion: linear (max-norm soft-OR) or geometric (log soft-AND).",
+        choices=["linear", "geometric", "rank"],
+        help=(
+            "Cross-modal fusion: linear (max-norm soft-OR), geometric "
+            "(log soft-AND) or rank (scale-free)."
+        ),
     )
     args = parser.parse_args()
     return args
@@ -183,6 +187,8 @@ def _run_offline(
             )
             if fusion_mode == "geometric":
                 formula = "logK = θ·logK^T + (1-θ)·logK^V"
+            elif fusion_mode == "rank":
+                formula = "K = θ·rank(K^T) + (1-θ)·rank(K^V)"
             else:
                 formula = "K = θ·norm(K^T) + (1-θ)·norm(K^V)"
             print(
@@ -198,10 +204,14 @@ def _run_offline(
             )
 
         ratio = _resolve_keep_ratio(args)
-        high_precision_columns = select_high_precision_columns(global_asd_list, ratio)
+        high_precision_columns, kept_numel, total_numel = select_high_precision_by_params(
+            global_asd_list, ratio, column_numel(process_model.model)
+        )
+        param_ratio = (kept_numel / total_numel) if total_numel else 0.0
         print(
             f"[PRISM] Offline mixed precision: target_bit={getattr(args, 'target_bit', None)}, "
-            f"ratio={ratio:.6f}, {len(high_precision_columns)} high-precision columns."
+            f"target_param_ratio={ratio:.6f}, param_ratio={param_ratio:.6f}, "
+            f"{len(high_precision_columns)} high-precision columns."
         )
 
     if hasattr(process_model, "to_cuda"):
@@ -217,6 +227,7 @@ def _run_offline(
             zero_point=True,
             high_precision_columns=high_precision_columns,
             low_w_bit=getattr(args, "asd_low_w_bit", 4),
+            high_w_bit=int(getattr(args, "asd_high_bit", 16) or 16),
         )
         print("[PRISM] Offline pseudo quantization applied (K mixed precision).")
     else:
