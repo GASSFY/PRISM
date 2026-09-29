@@ -160,11 +160,13 @@ class WeightBook:
                     saved = self.fp[id(linear.weight)]
                     linear.weight.data.copy_(saved.to(device=linear.weight.device, dtype=linear.weight.dtype))
 
-    def quantize(self, letters: str, w_bit: int, w_group: int, zero_point: bool) -> dict[str, int]:
+    def quantize(self, letters: str, w_bit: int, w_group: int, zero_point: bool) -> dict[str, Any]:
         """RTN the selected components. Returns how many linears used a fallback group."""
         fallback = 0
         applied = 0
         seen: set[int] = set()
+        num = {letter: 0.0 for letter in letters}
+        den = {letter: 0.0 for letter in letters}
         for letter in letters:
             for module in self.groups[letter]:
                 for linear in get_named_linears(module).values():
@@ -174,7 +176,19 @@ class WeightBook:
                     seen.add(key)
                     applied += 1
                     fallback += _quantize_linear(linear, w_bit, w_group, zero_point)
-        return {"linears": applied, "group_fallbacks": fallback}
+                    orig = self.fp[key]
+                    delta = linear.weight.detach().float().cpu() - orig
+                    num[letter] += float(delta.pow(2).sum().item())
+                    den[letter] += float(orig.pow(2).sum().item())
+        weight_rel_l2 = {
+            letter: (num[letter] / den[letter]) ** 0.5 if den[letter] else None
+            for letter in letters
+        }
+        return {
+            "linears": applied,
+            "group_fallbacks": fallback,
+            "weight_rel_l2": weight_rel_l2,
+        }
 
 
 def _quantize_linear(linear: nn.Linear, w_bit: int, w_group: int, zero_point: bool) -> int:
@@ -194,34 +208,69 @@ def _quantize_linear(linear: nn.Linear, w_bit: int, w_group: int, zero_point: bo
     return fallback
 
 
-def _component_groups(process_model) -> dict[str, list[nn.Module]]:
-    model = process_model.model
-    if not hasattr(process_model, "fetch_vit") or not hasattr(process_model, "fetch_proj"):
-        raise RuntimeError(
-            "This probe is written for wrappers that expose fetch_vit and fetch_proj "
-            f"(got {type(process_model).__name__})."
+def _language_blocks(model) -> list[nn.Module]:
+    try:
+        return list(get_blocks(model))
+    except NotImplementedError:
+        pass
+    for path in (
+        ("language_model", "model", "layers"),
+        ("language_model", "layers"),
+        ("model", "layers"),
+    ):
+        cur = model
+        ok = True
+        for attr in path:
+            if not hasattr(cur, attr):
+                ok = False
+                break
+            cur = getattr(cur, attr)
+        if ok:
+            return list(cur)
+    raise NotImplementedError(f"get_blocks not implemented for {type(model).__name__}")
+
+
+def _layout(process_model) -> tuple[dict[str, list[nn.Module]], nn.Module, nn.Module, list[nn.Module], str]:
+    """Map Vision / interface / LLM onto the modules that actually run.
+
+    Qwen2.5-VL has no mm_projector. The patch merger inside the vision tower
+    is the interface, so it is P and the vision blocks before it are V.
+    Hooking the whole visual module would put the merger on both sides.
+    """
+    kind = type(process_model).__name__
+    llm_blocks = _language_blocks(process_model.model)
+    if not llm_blocks:
+        raise RuntimeError("Language backbone has no blocks.")
+    if kind == "Qwen2_5_VL":
+        visual = process_model.model.visual
+        groups = {"V": list(visual.blocks), "P": [visual.merger], "L": llm_blocks}
+        return (
+            groups,
+            visual.blocks[-1],
+            visual.merger,
+            llm_blocks,
+            "V=visual.blocks (before the merger), P=visual.merger, L=language layers",
         )
-    blocks = list(get_blocks(model))
-    return {
-        "V": [process_model.fetch_vit()],
-        "P": [process_model.fetch_proj()],
-        "L": blocks,
-    }
+    proj = process_model.fetch_proj()
+    if proj is None:
+        raise RuntimeError(f"{kind} has no projector module to use as P.")
+    groups = {"V": [process_model.fetch_vit()], "P": [proj], "L": llm_blocks}
+    if kind == "InternVL2":
+        note = "V=vision_model, P=mlp1, L=language layers. pixel_shuffle between V and P has no weights."
+    else:
+        note = "V=vision tower, P=mm_projector, L=language layers"
+    return groups, process_model.fetch_vit(), proj, llm_blocks, note
 
 
 class Probe:
-    def __init__(self, process_model):
-        model = process_model.model
-        blocks = list(get_blocks(model))
-        if not blocks:
-            raise RuntimeError("Language backbone has no blocks.")
-        mid = blocks[len(blocks) // 2]
+    def __init__(self, vision_module: nn.Module, proj_module: nn.Module, llm_blocks: list[nn.Module]):
+        mid = llm_blocks[len(llm_blocks) // 2]
         self.sites: list[tuple[str, nn.Module]] = [
-            ("vision_out", process_model.fetch_vit()),
-            ("proj_out", process_model.fetch_proj()),
-            ("llm_early", blocks[0]),
+            ("vision_out", vision_module),
+            ("proj_out", proj_module),
+            ("llm_early", llm_blocks[0]),
             ("llm_mid", mid),
-            ("llm_late", blocks[-1]),
+            ("llm_late", llm_blocks[-1]),
         ]
         self.captured: dict[str, torch.Tensor] = {}
         self._handles: list[Any] = []
@@ -294,22 +343,38 @@ class RunningMSE:
         return self.sse / self.numel
 
 
-def run_cell_against_fp(process_model, batches, probe: Probe, fp_cache: list[dict] | None):
+def run_cell_against_fp(
+    process_model,
+    batches,
+    probe: Probe,
+    fp_cache: list[dict] | None,
+    save_error: bool = False,
+    baselines: list[dict[str, list[torch.Tensor]]] | None = None,
+):
     """If fp_cache is None, this is the FP pass and the cache is returned.
 
-    Otherwise each batch is compared to fp_cache[i].
+    Otherwise each batch is compared to fp_cache[i]. When save_error is set,
+    the per-sample activation error (q - fp) is kept so a later joint cell can
+    measure ||e_AB - e_A - e_B||. A near-zero interaction with a large residual
+    would mean the scalar losses happened to add while the errors did not.
     """
     mse = {site: RunningMSE() for site in SITES}
+    cross = {site: RunningMSE() for site in SITES}
     kl_sum = 0.0
     kl_count = 0
     missing = {site: 0 for site in SITES}
     built: list[dict] = []
+    errors: dict[str, list[torch.Tensor]] = {site: [] for site in SITES}
 
     for index, batch in enumerate(batches):
         probe.clear()
         probe.install()
         fresh = _clone_batch(batch)
         forward_kwargs, _meta = process_model.generate_input(fresh)
+        # KL is computed from logits below. The KV cache is not used, and
+        # keeping it on GPU overflows a 32GB card once more than one sample
+        # is in flight.
+        forward_kwargs["use_cache"] = False
         outputs = process_model.forward(**forward_kwargs)
         logits = _logits_of(outputs).detach().float().cpu()
         labels = forward_kwargs["labels"].detach().cpu()
@@ -318,6 +383,8 @@ def run_cell_against_fp(process_model, batches, probe: Probe, fp_cache: list[dic
         for site in SITES:
             if site not in captured:
                 missing[site] += 1
+        del outputs, forward_kwargs, fresh
+        torch.cuda.empty_cache()
 
         if fp_cache is None:
             built.append({"activations": captured, "logits": logits, "labels": labels})
@@ -325,16 +392,38 @@ def run_cell_against_fp(process_model, batches, probe: Probe, fp_cache: list[dic
 
         ref = fp_cache[index]
         for site in SITES:
-            if site in captured and site in ref["activations"]:
-                mse[site].add(ref["activations"][site], captured[site])
+            if site not in captured or site not in ref["activations"]:
+                if save_error:
+                    errors[site].append(torch.zeros(0))
+                continue
+            fp_act = ref["activations"][site]
+            mse[site].add(fp_act, captured[site])
+            if fp_act.shape != captured[site].shape:
+                if save_error:
+                    errors[site].append(torch.zeros(0))
+                continue
+            err = captured[site].float() - fp_act.float()
+            if save_error:
+                errors[site].append(err.half())
+            if baselines:
+                acc = None
+                aligned = True
+                for prev in baselines:
+                    piece = prev[site][index]
+                    if piece.numel() == 0 or piece.shape != err.shape:
+                        aligned = False
+                        break
+                    piece_f = piece.float()
+                    acc = piece_f if acc is None else acc + piece_f
+                if aligned and acc is not None:
+                    cross[site].add(acc, err)
         part_sum, part_count = _masked_kl(ref["logits"], logits, ref["labels"])
         kl_sum += part_sum
         kl_count += part_count
-        del outputs, logits, forward_kwargs
-        torch.cuda.empty_cache()
+        del logits
 
     if fp_cache is None:
-        return built
+        return built, None
 
     cell = {}
     for site, stat in mse.items():
@@ -344,11 +433,29 @@ def run_cell_against_fp(process_model, batches, probe: Probe, fp_cache: list[dic
             "n_shape_mismatch": stat.n_mismatch,
             "n_missing_hook": missing[site],
         }
+        if baselines:
+            cell[site]["cross_residual_mse"] = cross[site].value()
     cell["logit_kl"] = {
         "mean": (kl_sum / kl_count) if kl_count else None,
         "n_tokens": kl_count,
     }
-    return cell
+    return cell, (errors if save_error else None)
+
+
+def _signal_rms(fp_cache: list[dict]) -> dict[str, float | None]:
+    """RMS of the full-precision activation at each probe. MSE / RMS^2 is a relative error."""
+    out: dict[str, float | None] = {}
+    for site in SITES:
+        sse = 0.0
+        numel = 0
+        for item in fp_cache:
+            tensor = item["activations"].get(site)
+            if tensor is None:
+                continue
+            sse += float(tensor.float().pow(2).sum().item())
+            numel += int(tensor.numel())
+        out[site] = (sse / numel) ** 0.5 if numel else None
+    return out
 
 
 def _finite(value: float | None) -> float:
@@ -428,9 +535,10 @@ def main() -> None:
         process_model.model.cuda()
 
     batches = load_collated_batches(process_model, cfg)
-    groups = _component_groups(process_model)
+    groups, vision_hook, proj_hook, llm_blocks, component_map = _layout(process_model)
+    print(f"[interaction] components: {component_map}", flush=True)
     book = WeightBook(groups)
-    probe = Probe(process_model)
+    probe = Probe(vision_hook, proj_hook, llm_blocks)
 
     w_bit = int(cfg.get("w_bit", 4))
     w_group = int(cfg.get("w_group", 128))
@@ -439,25 +547,42 @@ def main() -> None:
     print("[interaction] FP reference pass", flush=True)
     t0 = time.perf_counter()
     book.restore()
-    fp_cache = run_cell_against_fp(process_model, batches, probe, None)
+    fp_cache, _ = run_cell_against_fp(process_model, batches, probe, None)
     print(f"[interaction] FP reference done in {time.perf_counter() - t0:.1f}s", flush=True)
+    signal_rms = _signal_rms(fp_cache)
 
     cells: dict[str, dict] = {}
     quant_stats: dict[str, dict] = {}
+    saved_errors: dict[str, dict[str, list[torch.Tensor]]] = {}
     for name in CELL_NAMES:
         print(f"[interaction] cell {name or 'fp'}", flush=True)
         book.restore()
         quant_stats[name] = book.quantize(name, w_bit, w_group, zero_point)
+        baselines = None
+        if len(name) == 2:
+            baselines = [saved_errors[ch] for ch in name]
         cell_t0 = time.perf_counter()
-        cells[name] = run_cell_against_fp(process_model, batches, probe, fp_cache)
+        cells[name], errors = run_cell_against_fp(
+            process_model,
+            batches,
+            probe,
+            fp_cache,
+            save_error=(name in ("V", "P", "L")),
+            baselines=baselines,
+        )
+        if errors is not None:
+            saved_errors[name] = errors
+        resid = cells[name]["proj_out"].get("cross_residual_mse")
         print(
             f"[interaction] cell {name or 'fp'} done in {time.perf_counter() - cell_t0:.1f}s "
             f"vision_mse={cells[name]['vision_out']['mse']} "
-            f"logit_kl={cells[name]['logit_kl']['mean']}",
+            f"logit_kl={cells[name]['logit_kl']['mean']} "
+            f"proj_cross={resid}",
             flush=True,
         )
     book.restore()
     probe.remove()
+    del saved_errors, fp_cache
 
     flags = sanity_flags(cells)
     interactions = None
@@ -488,7 +613,9 @@ def main() -> None:
                 "normalization",
             ],
         },
+        "component_map": component_map,
         "param_counts": book.meta,
+        "signal_rms": signal_rms,
         "quant_stats": quant_stats,
         "cells": cells,
         "interactions": interactions,

@@ -10,8 +10,8 @@ model_args: "pretrained=lmms-lab/llava-onevision-qwen2-7b-ov"
 batch_size: "1"
 device: null
 
-data_path: ""
-image_folder: ""
+data_path: "/root/autodl-tmp/hf_home/datasets/coco/sharegpt4v_coco_only.json"
+image_folder: "/root/autodl-tmp/hf_home/datasets"
 n_samples: 32
 calib_batch_size: 1
 
