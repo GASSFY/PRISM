@@ -1,0 +1,26 @@
+# Experiment 01 — cross-component quantization interaction.
+# Fill pretrained / data_path / image_folder on the remote machine, then run
+# from the PRISM root:
+#
+#   python new_method/exp/component_interaction/run.py \
+#       --config new_method/exp/component_interaction/config.yaml
+
+model: llava_onevision
+model_args: "pretrained=lmms-lab/llava-onevision-qwen2-7b-ov"
+batch_size: "1"
+device: null
+
+data_path: ""
+image_folder: ""
+n_samples: 32
+calib_batch_size: 1
+
+# Same RTN recipe for every component that is switched on.
+# Weight-only. Group size falls back to per-output-row when in_features
+# is not divisible by w_group; that fallback is recorded in the JSON.
+w_bit: 4
+w_group: 128
+zero_point: true
+
+output_json: new_method/results/01_component_interaction/w4.json
+seed: 42
