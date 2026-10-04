@@ -48,6 +48,7 @@ experiments/
 docs/
 
 # Legacy / local caches
+*.zip
 *.log
 scale_cache/
 _paper_cache/
